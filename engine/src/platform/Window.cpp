@@ -17,11 +17,12 @@ Window::Window(const char* title, i32 width, i32 height) {
     // TODO(week1):
     //   1. SDL_Init with the video subsystem.
     //   2. Create a window and a renderer.
-    //      SDL_CreateWindowAndRenderer does both in one call - read its docs.
+    //      SDL_CreateWindowAndRenderer does both in one call - read its docs
     //   3. If anything fails, leave m_window/m_renderer null and log
     //      SDL_GetError() to stderr. Do not throw. Do not silently continue.
     //
     // Read the return value of every SDL call. All of them can fail.
+    
     (void)title; (void)width; (void)height;
 }
 
