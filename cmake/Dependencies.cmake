@@ -31,6 +31,22 @@ FetchContent_Declare(SDL3
 
 FetchContent_MakeAvailable(SDL3)
 
+if(ENGINE_WITH_IMGUI)
+    include(cmake/imgui.cmake)
+endif()
 # Later weeks add dependencies below this line:
 #   Week 2 - doctest      (unit tests)
+
+# --- doctest ----------------------------------------------------------------
+# Header-only unit test framework. Chosen for compile speed: a test suite that
+# is slow to build is a test suite that stops getting run.
+FetchContent_Declare(doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG        v2.4.11
+    GIT_SHALLOW    TRUE
+    SYSTEM)
+
+FetchContent_MakeAvailable(doctest)
+
+
 #   Week 8 - nlohmann_json (config files, reused by Week 9 scene files)

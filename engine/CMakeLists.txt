@@ -14,6 +14,9 @@
 set(ENGINE_SOURCES
     src/platform/Window.cpp
     # Week 2: src/core/MemUtil.cpp, src/platform/EventPump.cpp
+    src/core/ByteBuffer.cpp
+    src/core/MemUtil.cpp
+    src/platform/EventPump.cpp
     # Week 3: src/core/Log.cpp, src/core/Assert.cpp
     # ... one or two lines per week from here on
 )
@@ -21,6 +24,9 @@ set(ENGINE_SOURCES
 set(ENGINE_HEADERS
     include/engine/core/Types.h
     include/engine/platform/Window.h
+    include/engine/core/ByteBuffer.h
+    include/engine/core/MemUtil.h
+    include/engine/platform/EventPump.h
 )
 
 add_library(engine STATIC ${ENGINE_SOURCES} ${ENGINE_HEADERS})
@@ -35,5 +41,11 @@ target_include_directories(engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # PRIVATE and the sandbox loses the ability to touch SDL directly. That is a
 # real architectural milestone - notice when it happens.
 target_link_libraries(engine PUBLIC SDL3::SDL3)
+
+if(ENGINE_WITH_IMGUI)
+    target_sources(engine PRIVATE src/tools/EditorGui.cpp)
+    target_link_libraries(engine PUBLIC imgui::imgui)
+    target_compile_definitions(engine PUBLIC ENGINE_WITH_IMGUI)
+endif()
 
 engine_set_warnings(engine)

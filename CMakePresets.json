@@ -22,6 +22,35 @@
       }
     },
     {
+      "name": "asan",
+      "displayName": "_AddressSanitizer",
+      "description": "Debug build with AddressSanitizer enabled.",
+      "inherits": "debug",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_CXX_COMPILER": "cl.exe",
+    
+        "CMAKE_C_FLAGS_INIT": "/fsanitize=address /Zi",
+        "CMAKE_CXX_FLAGS_INIT": "/fsanitize=address /Zi",
+    
+        "CMAKE_EXE_LINKER_FLAGS_INIT": "/fsanitize=address /INCREMENTAL:NO",
+        "CMAKE_SHARED_LINKER_FLAGS_INIT": "/fsanitize=address /INCREMENTAL:NO"
+      }
+    },
+    //{
+    //  "name": "lsan",
+    //  "displayName": "_LeakSanitizer",
+    //  "description": "Debug build with LeakSanitizer enabled.",
+    //  "inherits": "debug",
+    //  "cacheVariables": {
+    //    "ENGINE_SANITIZER": "thread"
+    //  },
+    //  "environment": {
+    //    "CXXFLAGS": "/fsanitize=address"
+    //  }
+
+    //},
+    {
       "name": "release",
       "displayName": "Release",
       "description": "Optimised. Asserts compile out. Use for timing measurements from Week 4 onward.",

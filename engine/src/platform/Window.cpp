@@ -17,29 +17,30 @@ Window::Window(const char* title, i32 width, i32 height) {
     // TODO(week1):
     //   1. SDL_Init with the video subsystem.
     //   2. Create a window and a renderer.
-    //      SDL_CreateWindowAndRenderer does both in one call - read its docs
+    //      SDL_CreateWindowAndRenderer does both in one call - read its docs.
     //   3. If anything fails, leave m_window/m_renderer null and log
     //      SDL_GetError() to stderr. Do not throw. Do not silently continue.
     //
     // Read the return value of every SDL call. All of them can fail.
     
-    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) 
     {
         std::print(stderr, "Failed to initialize SDL video subsystem\n", SDL_GetError());
         return;
     }
 
-    sdl_videoInitialized = true;
+	sdl_videoInitialized = true;
 
     if (!SDL_CreateWindowAndRenderer(title, width, height, 0, &m_window, &m_renderer))
     {
-        std::print(stderr, "Failed to initialize SDL video renderer\n", SDL_GetError());
-
-        m_window = nullptr;
-        m_renderer = nullptr;
-
+		std::print(stderr, "Failed to create window and renderer\n", SDL_GetError());
+		
+		m_window = nullptr;
+		m_renderer = nullptr;
+        
         return;
     }
+
 }
 
 Window::~Window() {
@@ -53,58 +54,59 @@ Window::~Window() {
     if (m_renderer)
     {
         SDL_DestroyRenderer(m_renderer);
-        m_renderer = nullptr;
+		m_renderer = nullptr;
     }
 
     if (m_window)
     {
         SDL_DestroyWindow(m_window);
-        m_window = nullptr;
+		m_window = nullptr;
     }
 
     if (sdl_videoInitialized)
     {
         SDL_Quit();
-        sdl_videoInitialized = false;
+		sdl_videoInitialized = false;
     }
 }
 
-bool Window::IsValid() const {
+bool Window::IsValid() const
+{
     // TODO(week1)
     return m_window != nullptr && m_renderer != nullptr;
 }
 
-void Window::Clear(u8 r, u8 g, u8 b) {
+void Window::Clear(u8 r, u8 g, u8 b)
+{
     // TODO(week1): SDL_SetRenderDrawColor, then SDL_RenderClear.
-
-    if (!m_renderer)
+    if (!m_renderer) 
     {
         return;
     }
 
-    if (!SDL_SetRenderDrawColor(m_renderer, r, g, b, 255))
-    {
-        std::print(stderr, "Failed to set renderer draw color\n", SDL_GetError());
-        return;
-    }
+    if(!SDL_SetRenderDrawColor(m_renderer, r, g, b, 255))
+	{
+		std::print(stderr, "Failed to set render draw color\n", SDL_GetError());
+		return;
+	}
 
     if (!SDL_RenderClear(m_renderer))
     {
-        std::print(stderr, "Failed to clear renderer\n", SDL_GetError());
+		std::print(stderr, "Failed to clear renderer\n", SDL_GetError());
     }
 }
 
-void Window::Present() {
+void Window::Present()
+{
     // TODO(week1): SDL_RenderPresent.
-
-    if (!m_renderer)
+    if (!m_renderer) 
     {
         return;
     }
-
-    if (!SDL_RenderPresent(m_renderer))
+    
+    if(!SDL_RenderPresent(m_renderer))
     {
-        std::print(stderr, "Failed to present renderer\n", SDL_GetError());
+		std::print(stderr, "Failed to present renderer\n", SDL_GetError());
     }
 }
 

@@ -45,3 +45,4 @@ Thumbs.db
 callgrind.out.*
 massif.out.*
 perf.data*
+imgui.ini
