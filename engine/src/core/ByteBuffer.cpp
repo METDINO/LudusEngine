@@ -46,7 +46,7 @@ namespace eng {
     }
 
     void ByteBuffer::Fill(u8 value) {
-        for (usize i = 0; i <= m_size; ++i) {
+        for (usize i = 0; i < m_size; ++i) {
             m_data[i] = value;
         }
     }
