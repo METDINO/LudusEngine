@@ -23,15 +23,18 @@ namespace eng {
         std::memset(m_data, 0, size);
     }
 
+    ByteBuffer::ByteBuffer(const ByteBuffer& other) {
+        //m_size = other.m_size;   
+        //m_data = other.m_data;    // problem #2 
+        m_size = other.m_size;
+        m_data = new u8[m_size];
+        std::memcpy(m_data, other.m_data, m_size);
+    }
+
     ByteBuffer::~ByteBuffer() {
         delete m_data;
         m_data = nullptr;
         m_size = 0;
-    }
-
-    ByteBuffer::ByteBuffer(const ByteBuffer& other) {
-        m_size = other.m_size;
-        m_data = other.m_data;
     }
 
     ByteBuffer& ByteBuffer::operator=(const ByteBuffer& other) {
@@ -46,7 +49,7 @@ namespace eng {
     }
 
     void ByteBuffer::Fill(u8 value) {
-        for (usize i = 0; i < m_size; ++i) {
+        for (usize i = 0; i < m_size; ++i) { //Problem #1 removed =
             m_data[i] = value;
         }
     }
@@ -66,7 +69,7 @@ namespace eng {
     }
 
     const char* DescribeBuffer(const ByteBuffer& buffer) {
-        char text[64];
+        static thread_local char text[64];
         std::snprintf(text, sizeof(text), "ByteBuffer{ size=%zu }", buffer.Size());
         return text;
     }

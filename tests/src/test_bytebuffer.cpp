@@ -58,14 +58,14 @@ TEST_CASE("Write refuses a range that would not fit") {
 }
 
 TEST_CASE("a copied buffer is independent of its source") {
-    ByteBuffer original(8);
-    original.Fill(0x11);
+    ByteBuffer first(8);
+    first.Fill(0x11);
 
-    ByteBuffer copy(original);
-    copy.Fill(0x22);
+    ByteBuffer second(first); // 0x11
+    second.Fill(0x22);
 
-    CHECK(original.Data()[0] == 0x11);   // must not have been changed
-    CHECK(copy.Data()[0] == 0x22);
+    CHECK(first.Data()[0] == 0x11);   // must not have been changed
+    CHECK(second.Data()[0] == 0x22);
 }
 
 TEST_CASE("DescribeBuffer returns text that survives the call") {

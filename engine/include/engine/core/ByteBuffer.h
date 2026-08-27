@@ -27,9 +27,9 @@ namespace eng {
 class ByteBuffer {
 public:
     explicit ByteBuffer(usize size);
-    ~ByteBuffer();
-
     ByteBuffer(const ByteBuffer& other);
+
+    ~ByteBuffer();
     ByteBuffer& operator=(const ByteBuffer& other);
 
     // Raw access. Both overloads exist so that a const ByteBuffer hands out a
