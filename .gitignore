@@ -2,12 +2,20 @@
 # Everything CMake generates. Nothing in here belongs in version control:
 # it is machine-specific, it is enormous, and it is reproducible from source.
 build/
+build_output/
 out/
 cmake-build-*/
 
+# The library the editor compiles the project's scripts into, plus the build
+# script, the log and the generated header unit it writes alongside. All of it
+# is regenerated from the sources under assets/ the next time the editor
+# builds, so none of it belongs in version control.
+.build/
+
 # ---- Fetched dependencies --------------------------------------------------
-# FetchContent puts SDL inside build/, so the line above already covers it.
-# Listed explicitly in case you ever relocate FETCHCONTENT_BASE_DIR.
+# FetchContent puts SDL, doctest, nlohmann_json and ImGui inside build/, so
+# the line above already covers them. Listed explicitly in case you ever
+# relocate FETCHCONTENT_BASE_DIR.
 _deps/
 
 # ---- IDE and editor --------------------------------------------------------
@@ -16,9 +24,12 @@ _deps/
 !.vscode/settings.json
 .idea/
 *.user
+*.suo
 *.sln
+*.sln.docstates
 *.vcxproj*
 CMakeUserPresets.json
+IntelGraphicsProfiles/
 
 # ---- Compiler and linker artefacts -----------------------------------------
 *.o
@@ -30,19 +41,39 @@ CMakeUserPresets.json
 *.dll
 *.exe
 *.pdb
+*.idb
 *.ilk
 *.exp
+*.tlog
+*.lastbuildstate
+
+# ---- Runtime output --------------------------------------------------------
+# The log file is written here while the program runs. It is output, not
+# source, so it is not committed.
+logs/
+*.log
+
+# The editor writes imgui.ini to remember how you arranged the panels.
+# A window arrangement is a personal preference, not source.
+imgui.ini
 
 # ---- OS noise --------------------------------------------------------------
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# ---- Profiler and sanitizer output -----------------------------------------
-# Week 2 onward. Reports are evidence, not source. Paste findings into your
-# writeups instead of committing raw dumps.
+# ---- Tool output -----------------------------------------------------------
+# Reports produced by profiling and analysis tools. Output, not source.
+#
 *.trace
 *.heaptrack.*
 callgrind.out.*
 massif.out.*
 perf.data*
-imgui.ini
+
+# ---- NOT ignored, deliberately ---------------------------------------------
+# assets/**/*.bmp and assets/**/*.json ARE committed on purpose. The classic
+# failure is a scene that works on the author's machine and nowhere else,
+# because an image was never added to version control.
+!assets/**

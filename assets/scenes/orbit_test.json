@@ -1,0 +1,638 @@
+{
+  "_comment": "An example scene. 22 entities and 3 different images. The eighteen asteroids all use the same picture, so it is loaded once and shared - open the Inspector on one of them and look at how many things are sharing it.",
+  "_hierarchy_note": "SolarRoot -> Planet -> Moon is three levels deep on purpose. Only the root, the planet and the moon have a SpinComponent; the orbiting is produced entirely by the parent/child transform tree.",
+  "name": "OrbitTest",
+  "camera": {
+    "position": [
+      0,
+      0
+    ],
+    "zoom": 1
+  },
+  "entities": [
+    {
+      "name": "SolarRoot",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            0,
+            0
+          ],
+          "rotation": 0,
+          "scale": [
+            1,
+            1
+          ]
+        },
+        {
+          "type": "SpinComponent",
+          "radiansPerSecond": 0.35
+        }
+      ]
+    },
+    {
+      "name": "Planet",
+      "parent": "SolarRoot",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            160,
+            0
+          ],
+          "rotation": 0,
+          "scale": [
+            1.5,
+            1.5
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_blue.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 1
+        },
+        {
+          "type": "SpinComponent",
+          "radiansPerSecond": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Moon",
+      "parent": "Planet",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            50,
+            0
+          ],
+          "rotation": 0,
+          "scale": [
+            0.6,
+            0.6
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_green.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 2
+        },
+        {
+          "type": "SpinComponent",
+          "radiansPerSecond": -1.6
+        }
+      ]
+    },
+    {
+      "name": "OrientationMarker",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            0,
+            -200
+          ],
+          "rotation": 0,
+          "scale": [
+            2,
+            2
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/marker_up.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 3
+        },
+        {
+          "type": "SpinComponent",
+          "radiansPerSecond": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Asteroid00",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            340,
+            0
+          ],
+          "rotation": 0,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid01",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            319.5,
+            116.29
+          ],
+          "rotation": 0.3491,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid02",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            260.46,
+            218.55
+          ],
+          "rotation": 0.6981,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid03",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            170,
+            294.45
+          ],
+          "rotation": 1.0472,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid04",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            59.04,
+            334.83
+          ],
+          "rotation": 1.3963,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid05",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -59.04,
+            334.83
+          ],
+          "rotation": 1.7453,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid06",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -170,
+            294.45
+          ],
+          "rotation": 2.0944,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid07",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -260.46,
+            218.55
+          ],
+          "rotation": 2.4435,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid08",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -319.5,
+            116.29
+          ],
+          "rotation": 2.7925,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid09",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -340,
+            0
+          ],
+          "rotation": 3.1416,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid10",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -319.5,
+            -116.29
+          ],
+          "rotation": 3.4907,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid11",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -260.46,
+            -218.55
+          ],
+          "rotation": 3.8397,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid12",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -170,
+            -294.45
+          ],
+          "rotation": 4.1888,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid13",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            -59.04,
+            -334.83
+          ],
+          "rotation": 4.5379,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid14",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            59.04,
+            -334.83
+          ],
+          "rotation": 4.8869,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid15",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            170,
+            -294.45
+          ],
+          "rotation": 5.236,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid16",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            260.46,
+            -218.55
+          ],
+          "rotation": 5.5851,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    },
+    {
+      "name": "Asteroid17",
+      "components": [
+        {
+          "type": "TransformComponent",
+          "position": [
+            319.5,
+            -116.29
+          ],
+          "rotation": 5.9341,
+          "scale": [
+            0.8,
+            0.8
+          ]
+        },
+        {
+          "type": "SpriteComponent",
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "layer": 0
+        }
+      ]
+    }
+  ],
+  "_motion_note": "SolarRoot spins, so Planet - its child, 160 units out - ORBITS the origin. Planet spins, so Moon orbits the Planet and the Planet visibly turns. Moon spins backwards on its own axis. There is no orbit code anywhere: a child's position in the world is worked out through its parent, so spinning a parent sweeps its children round with it. All of it comes from this file."
+}

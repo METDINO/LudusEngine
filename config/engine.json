@@ -1,0 +1,49 @@
+{
+  "_comment": "The settings the engine reads when it starts. Change a value, save, and run again - no rebuilding. config/engine.example.json is the documented copy; this is the one that is actually read.",
+
+  "window": {
+    "title": "Engine2D",
+    "width": 1280,
+    "height": 720
+  },
+
+  "logging": {
+    "_note": "threshold hides anything less important than the level you name. Info, Warning or Error.",
+    "threshold": "Info",
+    "file": "logs/engine.log"
+  },
+
+  "tunables": {
+    "_note": "fixedTimestepSeconds is how much time one simulation step represents. 0.016666667 is sixty steps a second. Try 0.1 and watch the movement become chunky while the drawing stays smooth.",
+    "fixedTimestepSeconds": 0.016666667,
+    "maxStepsPerFrame": 5,
+    "logBufferCapacity": 4096,
+    "gizmoCircleSegments": 24
+  },
+
+  "startup": {
+    "scene": "scenes/orbit_test.json"
+  },
+
+  "input": {
+    "_note": "A binding is Device.Name. Key. followed by any key name, or Mouse. followed by Left, Right or Middle. An action can have several, which is how WASD and the arrow keys both work.",
+    "contexts": {
+      "gameplay": {
+        "MoveLeft":  ["Key.A", "Key.Left"],
+        "MoveRight": ["Key.D", "Key.Right"],
+        "MoveUp":    ["Key.W", "Key.Up"],
+        "MoveDown":  ["Key.S", "Key.Down"],
+        "Jump":      ["Key.Space"],
+        "Interact":  ["Key.E", "Mouse.Left"],
+        "Pause":     ["Key.Escape"],
+        "Quit":      ["Key.Q"]
+      },
+      "menu": {
+        "NavigateUp":   ["Key.W", "Key.Up"],
+        "NavigateDown": ["Key.S", "Key.Down"],
+        "Confirm":      ["Key.Space", "Key.Return"],
+        "Back":         ["Key.Escape"]
+      }
+    }
+  }
+}

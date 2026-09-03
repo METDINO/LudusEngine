@@ -6,6 +6,7 @@
     {
       "name": "base",
       "hidden": true,
+      "description": "Settings shared by every preset below. 'hidden' means it cannot be selected on its own.",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
@@ -14,7 +15,7 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Assertions on, optimisations off. Your default all semester.",
+      "description": "No optimisation, full debugging information. Use this one unless you have a reason not to.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
@@ -22,38 +23,9 @@
       }
     },
     {
-      "name": "asan",
-      "displayName": "_AddressSanitizer",
-      "description": "Debug build with AddressSanitizer enabled.",
-      "inherits": "debug",
-      "cacheVariables": {
-        "CMAKE_C_COMPILER": "cl.exe",
-        "CMAKE_CXX_COMPILER": "cl.exe",
-    
-        "CMAKE_C_FLAGS_INIT": "/fsanitize=address /Zi",
-        "CMAKE_CXX_FLAGS_INIT": "/fsanitize=address /Zi",
-    
-        "CMAKE_EXE_LINKER_FLAGS_INIT": "/fsanitize=address /INCREMENTAL:NO",
-        "CMAKE_SHARED_LINKER_FLAGS_INIT": "/fsanitize=address /INCREMENTAL:NO"
-      }
-    },
-    //{
-    //  "name": "lsan",
-    //  "displayName": "_LeakSanitizer",
-    //  "description": "Debug build with LeakSanitizer enabled.",
-    //  "inherits": "debug",
-    //  "cacheVariables": {
-    //    "ENGINE_SANITIZER": "thread"
-    //  },
-    //  "environment": {
-    //    "CXXFLAGS": "/fsanitize=address"
-    //  }
-
-    //},
-    {
       "name": "release",
       "displayName": "Release",
-      "description": "Optimised. Asserts compile out. Use for timing measurements from Week 4 onward.",
+      "description": "Optimised. Much faster to run and much harder to debug, because the compiler has rearranged the code.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
@@ -62,8 +34,8 @@
     },
     {
       "name": "strict",
-      "displayName": "Debug (warnings as errors)",
-      "description": "Week 1 stretch goal. Run this before you push.",
+      "displayName": "Debug, warnings as errors",
+      "description": "The same as debug, except a compiler warning stops the build. Run this before handing work in.",
       "inherits": "debug",
       "cacheVariables": {
         "ENGINE_WARNINGS_AS_ERRORS": "ON"
@@ -72,15 +44,41 @@
   ],
 
   "buildPresets": [
-    { "name": "debug",   "configurePreset": "debug" },
-    { "name": "release", "configurePreset": "release" },
-    { "name": "strict",  "configurePreset": "strict" }
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "configuration": "Debug",
+      "description": "Every build preset names its configuration explicitly. Visual Studio picks Debug or Release at BUILD time rather than at configure time, so without this line 'cmake --build --preset release' would quietly build the Debug version."
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release"
+    },
+    {
+      "name": "strict",
+      "configurePreset": "strict",
+      "configuration": "Debug"
+    }
   ],
 
   "testPresets": [
     {
       "name": "debug",
       "configurePreset": "debug",
+      "configuration": "Debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "strict",
+      "configurePreset": "strict",
+      "configuration": "Debug",
       "output": { "outputOnFailure": true }
     }
   ]
