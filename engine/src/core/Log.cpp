@@ -7,32 +7,48 @@
 
 namespace eng {
 
+    
+
 // Turns a level into the word the Console and the log file show.
-const char* ToString(LogLevel /*level*/) {
-    return "Info";
+const char* ToString(LogLevel level) {
+    switch (level)
+    { 
+        using enum LogLevel;
+        case Info:      return "Info";
+        case Warning:   return "Warning";
+        case Error:     return "Error";
+    }
+    return "?";
 }
 
 // Turns a word from the settings file back into a level. Returns false when the
 // text is not a level name, so the caller can report it rather than guess.
 bool ParseLogLevel(std::string_view /*text*/, LogLevel& /*out*/) {
+    
     return false;
 }
 
+bool m_initialized = false;
+LogLevel g_threshold;
 // Opens the log: the terminal, the log file, and the in-memory list the editor's
 // Console window reads. First subsystem up, because everything else writes to it.
-bool Log::Init(std::string_view /*logFilePath*/, LogLevel /*threshold*/) {
-    return false;
+bool Log::Init(std::string_view logFilePath, LogLevel threshold) {
+    g_threshold = threshold;
+
+    m_initialized = true;
+    return m_initialized;
 }
 
 // Closes the log file. Last subsystem down, so that every other subsystem's
 // shutdown message still has somewhere to go.
 void Log::Shutdown() {
+    m_initialized = false;
 }
 
 // Has the log been opened yet? Anything that might run before start-up asks
 // this first.
 bool Log::IsInitialised() {
-    return false;
+    return m_initialized;
 }
 
 // Sets the lowest level that gets recorded. Anything below it is dropped.
