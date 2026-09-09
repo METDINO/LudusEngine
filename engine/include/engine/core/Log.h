@@ -100,7 +100,7 @@ public:
     // Opens the log file and starts the clock that timestamps each message.
     // Pass an empty path for "terminal and Console window only", which is what
     // the unit tests want.
-    static bool Init(std::string_view logFilePath, LogLevel threshold);
+    bool Init(BootConfig& config) override;
 
     // Flushes and closes the file. The log is started first and shut down last
     // of everything in the engine, so that a subsystem can still report a

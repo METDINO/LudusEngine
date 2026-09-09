@@ -10,7 +10,6 @@ namespace eng {
 // Returns the one and only engine. Created the first time it is asked for, so
 // it is guaranteed to exist before anything tries to use it.
 Engine& Engine::Get() {
-    static Engine instance;
     return instance;
 }
 
@@ -19,17 +18,61 @@ Window& Engine::GetWindow() {
     return *m_window;
 }
 
+
+bool Engine::RendererSubsystem::Init(const BootConfig&)
+{
+    Engine& engine = Engine::Get();
+
+    if (!rRenderer::Init(engine.m_window)) {
+        return false;
+    }
+
+    engine.m_camera.SetViewportSize(Renderer::OutputSize());
+
+    return true;
+
+}
+
+void Engine::RenderSubsystem::Shutdown()
+{
+    Renderer::Shutdown();
+}
+
+bool Engine::GuiSubsystem::Init(const BootConfig&) 
+{
+    return m_init ? m_init() : true; //return true by default
+}
+
+void Engine::GuiSubsystem::Use(std::function < bool()> init, std::function<void()> shutdown)
+{
+    m_init = std::move(init);
+    m_shutdown = std::move(init);
+}
+
+void Engine::GuiSubsystem::Shutdown()
+{
+    if (m_shutdown)
+        m_shutdown;
+}
+
 // Builds the ordered list of subsystems. Registration order IS dependency
 // order, and shutdown runs it in reverse: Log, FileSystem, Window, Renderer,
 // EditorGui, Input, Resources, Gizmos, Messaging, Scripts, Scene, Collision.
 void Engine::RegisterBuiltinSubsystems(const Options& options) {
-    m_subsystems.Register(std::make_unique<LambdaSubsystem>(
-        "Log", 
-        [this] {
-    LogBuffer::SetCapacity(static_cast<std::size_t>(m_config.logBufferCapacity));
-    return Log::Init("", m_config.logThreshold);
-        },
-        [] { Log::Shutdown(); }));
+
+    m_subsystems.Add("Log", m_log);
+    m_subsystems.Add("FileSystem", m_filesystem);
+    m_subsystems.Add("Window", m_window);
+    m_subsystems.Add("Renderer", m_renderer);
+    m_subsystems.Add("EditorGui", m_gui);
+    m_subsystems.Add("Input", m_input);
+    m_subsystems.Add("Resources", m_resources);
+    m_subsystems.Add("Gizmos", m_gismo);
+    m_subsystems.Add("MessageBus", m_messaging);
+    m_subsystems.Add("ScriptLibrary", m_scripts);
+    m_subsystems.Add("Scene", m_sceneSubsystem);
+    m_subsystems.Add("Collisions", m_collisionSubsystem);
+
 }
 
 // Starts everything: reads the settings file, brings the subsystems up in
