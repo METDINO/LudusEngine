@@ -11,7 +11,7 @@ namespace eng {
 // walking up until it finds a folder containing assets/. Where it settled is
 // written to the log, because that line is the first thing to check when a file
 // will not load on somebody else's machine.
-bool FileSystem::Init() {
+bool FileSystem::Init(const BootConfig&) {
     return false;
 }
 

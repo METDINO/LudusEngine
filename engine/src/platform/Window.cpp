@@ -2,10 +2,16 @@
 //  Window.cpp - a skeleton. Every function is here with the right signature and
 //  an empty body. Window.h is the specification; read it before filling one in.
 // =============================================================================
-
+#include <engine/core/Subsystem.h>
 #include <engine/platform/Window.h>
 
 namespace eng {
+
+bool Window::Init(const BootConfig& config) { //this
+    return false;
+}
+void Window::Shutdown() {
+}
 
 // Opens an operating-system window of the given size, and the object that draws
 // into it. If anything fails the object is left INVALID rather than half-built,

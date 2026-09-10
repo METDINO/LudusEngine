@@ -24,10 +24,9 @@
 //  everything registered before it is already running.
 // ============================================================================
 
-#include <functional>
-#include <memory>
 #include <string>
 #include <vector>
+
 
 namespace eng {
 
@@ -76,14 +75,16 @@ public:
     // Safe to call after a failed InitAll - that already unwound itself.
     void ShutdownAll();
 
-    std::size_t Count() const { return m_subsystems.size(); }
-
-    // Lists what is registered and whether it is currently running.
-    void ForEach(const std::function<void(const Subsystem&, bool running)>& fn) const;
+    std::size_t Count() const { return m_entries.size(); }
 
 private:
-    std::vector<std::unique_ptr<Subsystem>> m_subsystems;
-    std::size_t                             m_initialisedCount = 0;
+    struct Entry {
+        std::string name;
+        Subsystem* subsystem = nullptr;
+    };
+
+    std::vector<Entry> m_entries;
+    std::size_t m_startedCount = 0;
 };
 
 } // namespace eng

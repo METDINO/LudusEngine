@@ -8,8 +8,14 @@
 // =============================================================================
 
 #include <engine/render/Gizmos.h>
-
+#include <engine/core/Subsystem.h>
 namespace eng {
+
+    bool Gizmos::Init(const BootConfig& config) {
+    return true;
+}
+void Gizmos::Shutdown() {
+}
 
 // Turns a category into a readable name, for the editor's Gizmos menu.
 const char* ToString(GizmoCategory /*category*/) {

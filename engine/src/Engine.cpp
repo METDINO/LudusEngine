@@ -10,12 +10,13 @@ namespace eng {
 // Returns the one and only engine. Created the first time it is asked for, so
 // it is guaranteed to exist before anything tries to use it.
 Engine& Engine::Get() {
+    static Engine instance;
     return instance;
 }
 
 // Hands back the game window, so the editor can attach its interface to it.
 Window& Engine::GetWindow() {
-    return *m_window;
+    return m_window;
 }
 
 
@@ -23,7 +24,7 @@ bool Engine::RendererSubsystem::Init(const BootConfig&)
 {
     Engine& engine = Engine::Get();
 
-    if (!rRenderer::Init(engine.m_window)) {
+    if (!Renderer::Init(engine.m_window)) {
         return false;
     }
 
@@ -33,7 +34,7 @@ bool Engine::RendererSubsystem::Init(const BootConfig&)
 
 }
 
-void Engine::RenderSubsystem::Shutdown()
+void Engine::RendererSubsystem::Shutdown()
 {
     Renderer::Shutdown();
 }
@@ -55,6 +56,85 @@ void Engine::GuiSubsystem::Shutdown()
         m_shutdown;
 }
 
+bool Engine::InputSubsystem::Init(const BootConfig&) {
+    const Json& document = Engine::Get().m_configDocument;
+
+    std::string warnings;
+    if (document.contains("input"))
+    {
+        InputMap::LoadBindings(document["input"], warnings);
+    } else {
+        ENGINE_LOG_WARN(Channels::kInput,
+                        "the settings file has no \"input\" section, so no controls are bound");
+    }
+
+    InputMap::PushContext("gameplay");
+    return true;
+}
+
+void Engine::InputSubsystem::Shutdown() {
+    InputMap::ClearBindings();
+}
+
+bool Engine::SceneSubsystem::Init(const BootConfig&) {
+    Engine& engine = Engine::Get();
+
+    ComponentFactory::RegisterBuiltins();
+    CollisionSystem::RegisterComponentTypes();
+    SpinSystem::RegisterComponentTypes();
+    ScriptSystem::RegisterComponentTypes();
+
+    engine.m_spinSystem = std::make_unique<SpinSystem>();
+    engine.m_scriptSystem = std::make_unique<ScriptSystem>();
+    SystemScheduler::Register(engine.m_spinSystem.get());
+    SystemScheduler::Register(engine.m_scriptSystem.get());
+
+    engine.m_scene = std::make_unique<Scene>();
+    Scene::SetActive(engine.m_scene.get());
+    return true;
+}
+
+void Engine::SceneSubsystem::Shutdown() {
+    Engine& engine = Engine::Get();
+
+    if (engine.m_scene != nullptr) {
+        engine.m_scene->Unload();
+    }
+    if (engine.m_spinSystem != nullptr) {
+        SystemScheduler::Unregister(engine.m_spinSystem.get());
+        engine.m_spinSystem.reset();
+    }
+    if (engine.m_scriptSystem != nullptr) {
+        SystemScheduler::Unregister(engine.m_scriptSystem.get());
+        engine.m_scriptSystem.reset();
+    }
+    SpinSystem::Clear();
+    ScriptSystem::Clear();
+    SpriteRenderSystem::Clear();
+    Scene::SetActive(nullptr);
+    engine.m_scene.reset();
+}
+
+bool Engine::CollisionSubsystem::Init(const BootConfig&) {
+    Engine& engine = Engine::Get();
+    
+    engine.m_collisionSystem = std::make_unique<CollisionSystem>();
+    SystemScheduler::Register(engine.m_collisionSystem.get());
+
+    ScriptSystem::SubscribeToCollisions();
+    return true;
+}
+
+void Engine::CollisionSubsystem::Shutdown() {
+    Engine& engine = Engine::Get();
+
+    if (engine.m_collisionSystem != nullptr) {
+        SystemScheduler::Unregister(engine.m_collisionSystem.get());
+    }
+    CollisionSystem::Clear();
+    engine.m_collisionSystem.reset();
+}
+
 // Builds the ordered list of subsystems. Registration order IS dependency
 // order, and shutdown runs it in reverse: Log, FileSystem, Window, Renderer,
 // EditorGui, Input, Resources, Gizmos, Messaging, Scripts, Scene, Collision.
@@ -64,12 +144,17 @@ void Engine::RegisterBuiltinSubsystems(const Options& options) {
     m_subsystems.Add("FileSystem", m_filesystem);
     m_subsystems.Add("Window", m_window);
     m_subsystems.Add("Renderer", m_renderer);
-    m_subsystems.Add("EditorGui", m_gui);
+    
+    if (options.guiInit) {
+        m_gui.Use(options.guiInit, options.guiShutdown);
+        m_subsystems.Add("EditorGui", m_gui);
+    }
+
     m_subsystems.Add("Input", m_input);
     m_subsystems.Add("Resources", m_resources);
-    m_subsystems.Add("Gizmos", m_gismo);
-    m_subsystems.Add("MessageBus", m_messaging);
-    m_subsystems.Add("ScriptLibrary", m_scripts);
+    m_subsystems.Add("Gizmos", m_gismos);
+    m_subsystems.Add("Messaging", m_messaging);
+    m_subsystems.Add("Scripts", m_scripts);
     m_subsystems.Add("Scene", m_sceneSubsystem);
     m_subsystems.Add("Collisions", m_collisionSubsystem);
 
