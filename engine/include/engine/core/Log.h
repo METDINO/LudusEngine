@@ -96,7 +96,7 @@ inline constexpr std::string_view kGame     = "Game";
 // The log itself. Every function is static because there is exactly one log
 // for the whole program and passing a pointer to it through every subsystem
 // would be noise.
-class Log : public Subsystem{
+class Log : public Subsystem {
 public:
     // Opens the log file and starts the clock that timestamps each message.
     // Pass an empty path for "terminal and Console window only", which is what
