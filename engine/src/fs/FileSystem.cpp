@@ -4,14 +4,63 @@
 // =============================================================================
 
 #include <engine/fs/FileSystem.h>
+#include <engine/core/Log.h>
+#include <SDL3/SDL.h>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 
 namespace eng {
+namespace {
+
+namespace fs = std::filesystem;
+
+std::string g_root;
+
+bool LooksLikeRoot(const fs::path& directory) {
+    std::error_code ec;
+    return fs::is_directory(directory / "assets", ec);
+}
+
+} // namespace
 
 // Works out where the project is by starting at the program's own location and
 // walking up until it finds a folder containing assets/. Where it settled is
 // written to the log, because that line is the first thing to check when a file
 // will not load on somebody else's machine.
 bool FileSystem::Init(const BootConfig&) {
+
+    if (const char* overridePath = std::getenv("ENGINE_ASSET_ROOT");
+        overridePath != nullptr && overridePath[0] != '\0') {
+        std::error_code ec;
+        const fs::path candidate = fs::absolute(fs::path(overridePath), ec);
+        if (LooksLikeRoot(candidate)) {
+            g_root = candidate.string();
+            ENGINE_LOG_INFO(Channels::kFileSys, "asset folder taken from ENGINE ASSET_ROOT: {}", g_root);
+            return true;
+        }
+        ENGINE_LOG_WARN(Channels::kFileSys, "ENGINE_ASSET_ROOT is set to '{}' but there is no 'assets' folder there; searching instead", overridePath);
+    }
+
+    fs::path start;
+
+    if (const char* base = SDL_GetBasePath(); base != nullptr && base[0] != '\0') {
+        start = fs::path(base);
+    } else {
+        std::error_code ec;
+        start = fs::current_path();
+        ENGINE_LOG_WARN(Channels::kFileSys, "could not find the program's own folder; falling back to the current directory, which is not reliable:");
+
+    }
+
+    std::error_code ec;
+    fs::path current = fs::absolute(start, ec);
+
+    for (int depth = 0; depth < 12; depth++)
+        ;
+
     return false;
 }
 
