@@ -108,9 +108,7 @@ bool FileSystem::Exists(std::string_view virtualPath) {
 
 // Lists the files in one folder, optionally filtered by extension, giving back
 // short names that can be handed straight back to ReadTextFile or Scene::Load.
-bool FileSystem::ListFiles(std::string_view virtualDirectory,
-                           std::string_view extension,
-                           std::vector<std::string>& out) {
+bool FileSystem::ListFiles(std::string_view virtualDirectory, std::string_view extension, std::vector<std::string>& out) {
 
     out.clear();
 
@@ -145,8 +143,7 @@ bool FileSystem::ListFiles(std::string_view virtualDirectory,
 
 // The listing a file BROWSER needs rather than a menu: sub-folders included,
 // folders first, each group sorted by name.
-bool FileSystem::ListDirectory(std::string_view virtualDirectory,
-                               std::vector<DirEntry>& out) {
+bool FileSystem::ListDirectory(std::string_view virtualDirectory, std::vector<DirEntry>& out) {
 
     out.clear();
 
@@ -197,38 +194,94 @@ bool FileSystem::ListDirectory(std::string_view virtualDirectory,
 }
 
 // Creates a folder, including any missing parent folders.
-bool FileSystem::CreateDirectory(std::string_view virtualDirectory,
-                                 std::string& outError) {
+bool FileSystem::CreateDirectory(std::string_view virtualDirectory, std::string& outError) {
     
     const std::string real = Resolve(virtualDirectory);
+    
     std::error_code ec;
-
     fs::create_directories(real, ec);
 
     if (ec) {
-        outError = "case create '" + std::string(virtualDirectory) + "': " + ec.message();
+        outError = "cannot create '" + std::string(virtualDirectory) + "': " + ec.message();
+        return false;
     }
     outError.clear();
     return true;
 }
 
 // Reads a whole text file - a scene, the settings - into a string.
-bool FileSystem::ReadTextFile(std::string_view /*virtualPath*/, std::string& /*outText*/,
-                              std::string& /*outError*/) {
-    return false;
+bool FileSystem::ReadTextFile(std::string_view virtualPath, std::string& outText, std::string& outError) {
+
+    const std::string real = Resolve(virtualPath);
+    
+    std::ifstream file(real);
+    if (!file) {
+        outError = "cannot open '" + std::string(virtualPath) + "' (looked in '" + real + "')";
+        return false;
+    }
+
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    outText = contents.str();
+
+    outError.clear();
+
+    return true;
 }
 
 // Reads a whole binary file - an image - into a list of bytes.
-bool FileSystem::ReadFile(std::string_view /*virtualPath*/,
-                          std::vector<unsigned char>& /*outBytes*/,
-                          std::string& /*outError*/) {
-    return false;
+bool FileSystem::ReadFile(std::string_view virtualPath, std::vector<unsigned char>& outBytes, std::string& outError) {
+
+    const std::string real = Resolve(virtualPath);
+    
+    std::ifstream file(real, std::ios::binary | std::ios::ate);
+
+    if (!file) {
+        outError = "cannot open '" + std::string(virtualPath) + "' (looked in '" + real + "')";
+        return false;
+    }
+
+    const std::streamsize size = file.tellg();
+    if (size < 0) {
+        outError = "cannot measure size of file'" + real + "'";
+        return false;
+    }
+
+    file.seekg(0, std::ios::beg);
+
+    outBytes.resize(static_cast<size_t>(size));
+    if (size > 0 && !file.read(reinterpret_cast<char*>(outBytes.data()), size)) {
+        outError = "'" + std::string(virtualPath) + "' read failed (looked in '" + real + "')";
+        outBytes.clear();
+        return false;
+    }
+
+    outError.clear();
+    return true;
 }
 
 // Writes a text file, creating any folders it needs on the way.
-bool FileSystem::WriteTextFile(std::string_view /*virtualPath*/, std::string_view /*text*/,
-                               std::string& /*outError*/) {
-    return false;
+bool FileSystem::WriteTextFile(std::string_view virtualPath, std::string_view text, std::string& outError) {
+
+    const std::string real = Resolve(virtualPath);
+
+    std::error_code ec;
+    fs::create_directories(fs::path(real).parent_path(), ec);
+
+    std::ofstream file(real, std::ios::trunc);
+
+    if (!file) {
+        outError = "cannot open '" + real + "' for writing";
+        return false;
+    }
+
+    file.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!file) {
+        outError = "writing to '" + real + "' failed";
+        return false;
+    }
+    outError.clear();
+    return true;
 }
 
 } // namespace eng

@@ -4,30 +4,75 @@
 // =============================================================================
 #include <engine/core/Subsystem.h>
 #include <engine/platform/Window.h>
+#include <engine/core/Config.h>
+#include <engine/core/Log.h>
+#include <SDL3/SDL.h>
+
 
 namespace eng {
 
-bool Window::Init(const BootConfig& config) { //this
-    return false;
+bool Window::Init(const BootConfig& config) { 
+    m_title = config.windowTitle.empty() ? "Ludus Engine" : config.windowTitle;
+
+    const int width = config.windowWidth;
+    const int height = config.windowHeight;
+
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+        ENGINE_LOG_ERROR(Channels::kPlatform, "could not start SDL video '{}',", SDL_GetError());
+        return false;
+    }
+
+    m_videoInitialised = true;
+
+    SDL_Window* rawWindow = nullptr;
+    SDL_Renderer* rawRenderer = nullptr;
+    if (!SDL_CreateWindowAndRenderer(m_title.c_str(), width, height, SDL_WINDOW_RESIZABLE, &rawWindow, &rawRenderer)) {
+        ENGINE_LOG_ERROR(Channels::kPlatform, "could not create the window '{}',", SDL_GetError());
+        
+        m_window.reset(rawWindow);
+        m_renderer.reset(rawRenderer);
+        
+        return false;
+    }
+
+    m_window.reset(rawWindow);
+    m_renderer.reset(rawRenderer);
+
+    if (!SDL_SetRenderVSync(m_renderer.get(), 1)) {
+        ENGINE_LOG_WARN(Channels::kPlatform, "vsync is not available '{}',", SDL_GetError());
+    }
+
+    ENGINE_LOG_INFO(Channels::kPlatform, "window created {}x{} \"{}\" (drawing with {})", width, height, m_title, SDL_GetRendererName(m_renderer.get()));
+
+    return true;
 }
 void Window::Shutdown() {
-}
 
-// Opens an operating-system window of the given size, and the object that draws
-// into it. If anything fails the object is left INVALID rather than half-built,
-// and no exception is thrown - a display that will not open is a problem with
-// the machine, not a bug, and the caller should be able to exit tidily.
-Window::Window(const char* /*title*/, int /*width*/, int /*height*/) {
+    if (m_window == nullptr && m_renderer == nullptr && !m_videoInitialised) {
+        return;
+    }
+
+    ENGINE_LOG_INFO(Channels::kPlatform, "window closed");
+
+    m_renderer.reset();
+    m_window.reset();
+
+    if (m_videoInitialised) {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        m_videoInitialised = false;
+    }
+
 }
 
 // Closes the window. The renderer has to go first, which is the order the
 // members are declared in - see Window.h.
 Window::~Window() {
+    Shutdown();
 }
 
 // Did the window actually open? Start-up stops here if it did not.
 bool Window::IsValid() const {
-    return false;
+    return m_window != nullptr && m_renderer != nullptr;
 }
 
 // How wide the window is, in pixels.
