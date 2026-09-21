@@ -77,35 +77,59 @@ bool Window::IsValid() const {
 
 // How wide the window is, in pixels.
 int Window::Width() const {
-    return 0;
+    int w = 0;
+    int h = 0;
+    if (m_window != nullptr) {
+        SDL_GetWindowSize(m_window.get(), &w, &h);
+    }
+    return w;
 }
 
 // How tall the window is, in pixels.
 int Window::Height() const {
-    return 0;
+    int w = 0;
+    int h = 0;
+    if (m_window != nullptr) {
+        SDL_GetWindowSize(m_window.get(), &w, &h);
+    }
+    return h;
 }
 
 // Changes the text in the window's title bar.
-void Window::SetTitle(const char* /*title*/) {
+void Window::SetTitle(const char* title) {
+    if (m_window != nullptr || title == nullptr) {
+        return;
+    }
+    m_title = title;
+    SDL_SetWindowTitle(m_window.get(), m_title.c_str());
 }
 
 // Fills the whole window with one colour, wiping last frame's picture.
-void Window::Clear(unsigned char /*r*/, unsigned char /*g*/, unsigned char /*b*/) {
+void Window::Clear(unsigned char r, unsigned char g, unsigned char b) {
+    if (m_renderer == nullptr) {
+        return;
+    }
+    SDL_SetRenderDrawColor(m_renderer.get(), r, g, b, SDL_ALPHA_OPAQUE);
+    SDL_RenderClear(m_renderer.get());
 }
 
 // Shows whatever has been drawn since the last Clear.
 void Window::Present() {
+    if (m_renderer == nullptr) {
+        return;
+    }
+    SDL_RenderPresent(m_renderer.get());
 }
 
 // The underlying SDL window, as a plain pointer. Only the editor needs this, to
 // attach its interface - which is why it is handed out without naming SDL.
 void* Window::NativeWindowHandle() const {
-    return nullptr;
+    return m_window.get();
 }
 
 // The underlying SDL renderer, handed out for the same reason.
 void* Window::NativeRendererHandle() const {
-    return nullptr;
+    return m_renderer.get();
 }
 
 } // namespace eng
