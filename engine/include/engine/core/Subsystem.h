@@ -80,7 +80,7 @@ public:
 private:
     struct Entry {
         std::string name;
-        Subsystem* subsystem = nullptr;
+        Subsystem* system = nullptr;
     };
 
     std::vector<Entry> m_entries;
