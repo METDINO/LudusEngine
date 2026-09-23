@@ -4,6 +4,9 @@
 // =============================================================================
 
 #include <engine/Engine.h>
+#include <SDL3/SDL.h>
+#include <algorithm>
+#include <cstdio>
 
 namespace eng {
 
@@ -163,12 +166,57 @@ void Engine::RegisterBuiltinSubsystems(const Options& options) {
 // Starts everything: reads the settings file, brings the subsystems up in
 // order, sets the clock, and loads the starting scene. Returns false if the
 // engine cannot run at all.
-bool Engine::Init(const Options& /*options*/) {
-    return false;
+bool Engine::Init(const Options& options) {
+    m_filesystem.Init(m_config);
+
+    std::string configError;
+    if (!LoadBootConfig(options.configPath, m_config, m_configDocument, configError)) {
+        std::fprintf(stderr, "settings error: %s\n", configError.c_str());
+        return false;
+    }
+
+    RegisterBuiltinSubsystems(options);
+
+    ENGINE_LOG_INFO(Channels::kCore, "starting {} subsystems in order", m_subsystems.Count());
+
+    if (!m_subsystems.InitAll(m_config)) {
+        return false;
+    }
+
+    m_clock.Init();
+    m_clock.SetFixedStepSeconds(m_config.fixedTimestepSeconds);
+    m_clock.SetMaxStepsPerFrame(m_config.maxStepsPerFrame);
+
+    SystemScheduler::LogOrder();
+
+    const std::string scene = options.sceneOverride.empty() ? m_config.startupScene : options.sceneOverride;
+
+    if (!scene.empty()) {
+        std::string sceneError;
+        if (!LoadScene(scene, sceneError)) {
+            ENGINE_LOG_ERROR(Channels::kScene, "the starting scene '{}' did not load: {}", scene, sceneError);
+        }
+    }
+
+    m_lastFrameTicks = static_cast<double>(SDL_GetPerformanceCounter());
+    m_initialized = true;
+    ENGINE_LOG_INFO(Channels::kCore, "engine ready");
+    return true;
 }
 
 // Stops everything, in the exact reverse of the order it was started in.
 void Engine::Shutdown() {
+    if (!m_initialized) {
+        m_subsystems.ShutdownAll();
+        return;
+    }
+    ENGINE_LOG_INFO(Channels::kCore, "shutting engine down");
+    SystemScheduler::Clear();
+    m_subsystems.ShutdownAll();
+    m_initialized = false;
+
+    SDL_Quit();
+
 }
 
 // Replaces the current scene with the one in the named file, and moves the
@@ -215,11 +263,11 @@ void Engine::RenderFrame() {
 
 // Shows the frame that was just drawn.
 void Engine::PresentFrame() {
+    Renderer::Present();
 }
 
 // The standalone game's whole loop: begin, simulate, render, present, repeat.
 void Engine::Run() {
-
     while (BeginFrame()) {
         Simulate();
         RenderFrame();
