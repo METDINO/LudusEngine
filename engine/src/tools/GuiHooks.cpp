@@ -11,16 +11,17 @@
 
 namespace eng {
 
+namespace {
+
+    GuiHooks g_hooks;
+
+}
 // Records the three functions a tool wants the engine to call. The editor sets
 // these when it starts and clears them when it stops.
-void SetGuiHooks(const GuiHooks& /*hooks*/) {
-}
+void SetGuiHooks(const GuiHooks& hooks) { g_hooks = hooks; }
 
 // The currently installed hooks. Every one is null in a plain game, which is
 // what makes the engine work with no tool attached.
-const GuiHooks& GetGuiHooks() {
-    static const GuiHooks none{};
-    return none;
-}
+const GuiHooks& GetGuiHooks() { return g_hooks; }
 
 } // namespace eng

@@ -221,7 +221,9 @@ void Engine::Shutdown() {
 
 // Replaces the current scene with the one in the named file, and moves the
 // camera to wherever that file says it should be.
-bool Engine::LoadScene(std::string_view /*virtualPath*/, std::string& /*outError*/) {
+bool Engine::LoadScene(std::string_view virtualPath, std::string& outError) {
+
+
     return false;
 }
 
@@ -244,12 +246,33 @@ void Engine::ExitPlayMode() {
 // Starts one frame: measures real time, reads input, and works out how many
 // fixed simulation steps this frame owes. Returns false when it is time to quit.
 bool Engine::BeginFrame() {
-    return false;
+    const double now = static_cast<double>(SDL_GetPerformanceCounter());
+    const double frequency = static_cast<double>(SDL_GetPerformanceFrequency());
+    double delta = (now - m_lastFrameTicks) / frequency;
+    m_lastFrameTicks = now;
+
+    delta = std::min(delta, 0.25);
+
+    ResourceManager::PruneCache();
+
+    m_events.Poll();
+    InputMap::Update(m_events);
+
+    if (m_events.QuitRequested()) {
+        m_quitRequested = true;
+    }
+
+    m_camera.SetViewportSize(Renderer::OutputSize());
+
+    m_stepsThisFrame = m_clock.BeginFrame(delta);
+    return !m_quitRequested;
 }
 
 // Runs the simulation steps this frame owes, in system order: gameplay,
 // movement, collision, messages, create/destroy, camera.
 void Engine::Simulate() {
+
+
 }
 
 // Draws the world through any camera into whatever is currently being drawn
