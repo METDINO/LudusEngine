@@ -4,14 +4,42 @@
 // =============================================================================
 
 #include <engine/core/Json.h>
+#include <engine/core/Log.h>
 
 namespace eng {
+
+namespace {
+std::string Describe(std::string_view where, std::string_view key) {
+    if (where.empty()) {
+        return std::string(key);
+    }
+    return std::string(where) + "." + std::string(key);
+}
+
+const Json* Lookup(const Json& object, std::string_view key) {
+    if (!object.is_object()) {
+        return nullptr;
+    }
+    const auto it = object.find(std::string(key));
+    return (it != object.end()) ? &(*it) : nullptr;
+}
+
+} //namespace
 
 // Turns text into a Json document. On failure it returns an empty object and
 // puts the reason - including the line number - into outError, rather than
 // throwing.
-Json ParseJson(std::string_view /*text*/, std::string& /*outError*/) {
-    return Json::object();
+Json ParseJson(std::string_view text, std::string& outError) {
+
+    Json document =
+        Json::parse(text, nullptr, /*allow_exceptions=*/false, /*ignore_comments=*/true);
+
+    if (document.is_discarded()) {
+        outError = "the file is not valid JSON check formatting and try again.)";
+        return Json::object();
+    }
+    outError.clear();
+    return document;
 }
 
 // Reads a whole number from a field. Missing or wrong-typed fields give back

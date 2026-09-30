@@ -177,24 +177,35 @@ bool EventPump::QuitRequested() const {
 
 // Was this event already claimed by a tool? Game code checks this before acting
 // on it.
-bool EventPump::WasConsumed(std::size_t /*index*/) const {
-    return false;
+bool EventPump::WasConsumed(std::size_t index) const {
+    return index <m_consumed.size() && m_consumed[index] != 0;
 }
 
 // The readable name of a key code, so the settings file can say "Key.Space"
 // rather than a number.
-const char* EventPump::KeyName(int /*code*/) {
-    return "";
+const char* EventPump::KeyName(int code) {
+    const char* name = SDL_GetScancodeName(static_cast<SDL_Scancode>(code));
+    return (name != nullptr && name[0] != '\0') ? name : "?";
 }
 
 // The reverse: turns a name from the settings file into a key code. Returns a
 // negative number when the name is not a key.
-int EventPump::KeyCodeFromName(const char* /*name*/) {
-    return -1;
+int EventPump::KeyCodeFromName(const char* name) {
+    if (name == nullptr) {
+        return -1;
+    }
+    const SDL_Scancode code = SDL_GetScancodeFromName(name);
+    return (code == SDL_SCANCODE_UNKNOWN) ? -1 : static_cast<int>(code);
 }
 
 // The same, for mouse buttons: Left, Right or Middle.
-int EventPump::MouseButtonFromName(const char* /*name*/) {
+int EventPump::MouseButtonFromName(const char* name) {
+    if (name == nullptr) {
+        return -1;
+    }
+    if (SDL_strcasecmp(name, "Left") ==0) { return SDL_BUTTON_LEFT; }
+    if (SDL_strcasecmp(name, "Right") ==0) { return SDL_BUTTON_RIGHT; }
+    if (SDL_strcasecmp(name, "Middle") ==0) { return SDL_BUTTON_MIDDLE; }
     return -1;
 }
 

@@ -158,7 +158,7 @@ void Engine::RegisterBuiltinSubsystems(const Options& options) {
     //m_subsystems.Add("Gizmos", m_gismos);
     //m_subsystems.Add("Messaging", m_messaging);
     //m_subsystems.Add("Scripts", m_scripts);
-    //m_subsystems.Add("Scene", m_sceneSubsystem);
+    m_subsystems.Add("Scene", m_sceneSubsystem);
     //m_subsystems.Add("Collisions", m_collisionSubsystem);
 
 }
