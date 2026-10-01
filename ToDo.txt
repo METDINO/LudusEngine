@@ -1,8 +1,13 @@
-core / 
-		Json.cpp
 
 input /
 		InputMap.cpp
+
+resource / 
+		ResourceManager.cpp
+
+render /
+		Camera.cpp
+		Gizmos.cpp
 
 math /
 		Mat3.cpp
@@ -13,15 +18,6 @@ math /
 physics /
 		Collider.cpp
 
-platform / 
-		SdlHandles.cpp
-
-render /
-		Camera.cpp
-		Gizmos.cpp
-
-resource / 
-		ResourceManager.cpp
 
 scene / 
 		Component.cpp
