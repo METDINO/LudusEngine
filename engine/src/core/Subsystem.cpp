@@ -49,7 +49,7 @@ bool SubsystemStack::InitAll(const BootConfig& config) {
 // started in.
 void SubsystemStack::ShutdownAll() {
 
-    for (std::size_t i = m_startedCount; i > 0; i--) {
+    for (std::size_t i = m_startedCount; i-- > 0;) {
         ENGINE_LOG_INFO(Channels::kCore, "[{}/{}] {} started", i + 1, m_entries.size(),
                         m_entries[i].name);
         m_entries[i].system->Shutdown();

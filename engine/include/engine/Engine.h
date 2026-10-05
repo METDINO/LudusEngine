@@ -56,7 +56,6 @@
 #include <engine/scene/SystemOrder.h>
 #include <engine/tools/GuiHooks.h>
 
-
 #include <functional>
 #include <memory>
 #include <string>
@@ -97,7 +96,7 @@ public:
     void Shutdown();
 
     // ---- the frame --------------------------------------------------------
-    bool BeginFrame();        // returns false when it is time to stop
+    bool BeginFrame(); // returns false when it is time to stop
     void Simulate();
     void RenderFrame();
     void PresentFrame();
@@ -116,7 +115,7 @@ public:
     // to stop.
     void Run();
 
-    void RequestQuit()       { m_quitRequested = true; }
+    void RequestQuit() { m_quitRequested = true; }
     bool QuitRequested() const { return m_quitRequested; }
 
     // How many simulation steps the most recent BeginFrame asked for. The
@@ -124,11 +123,11 @@ public:
     int StepsThisFrame() const { return m_stepsThisFrame; }
 
     // ---- getting at the pieces -------------------------------------------
-    Window&           GetWindow();
-    const EventPump&  Events() const { return m_events; }
-    Camera&           GetCamera()    { return m_camera; }
-    GameClock&        Clock()        { return m_clock; }
-    Scene&            GetScene()     { return *m_scene; }
+    Window& GetWindow();
+    const EventPump& Events() const { return m_events; }
+    Camera& GetCamera() { return m_camera; }
+    GameClock& Clock() { return m_clock; }
+    Scene& GetScene() { return *m_scene; }
     const BootConfig& Config() const { return m_config; }
 
     // Loads a different scene at a safe moment, applying the camera settings
@@ -153,24 +152,37 @@ public:
     void ExitPlayMode();
     bool IsInPlayMode() const { return m_inPlayMode; }
 
-    bool IsInitialised() const { return m_initialized; }
+    bool IsInitialised() const { return m_initialised; }
 
 private:
     Engine() = default;
 
+    // Writes down the twelve subsystems and the order they start in. It only
+    // records them - nothing runs until Init calls SubsystemStack::InitAll.
     void RegisterBuiltinSubsystems(const Options& options);
 
-    class RendererSubsystem : public Subsystem
-    {
+    // ------------------------------------------------------------------
+    //  FIVE SUBSYSTEMS THAT BELONG TO THE ENGINE ITSELF.
+    //
+    //  Most of the engine's pieces are Subsystem classes in their own right -
+    //  Log, FileSystem, Window, ResourceManager, Gizmos, MessageBus and
+    //  ScriptLibrary each start and stop themselves, in their own files.
+    //
+    //  These five cannot, because starting them is not one call on one class:
+    //  it is CONNECTING several pieces to each other, and that wiring is the
+    //  engine's job. They are written here, inside Engine, so that they can
+    //  reach the engine's own members; what each one does is in Engine.cpp.
+    // ------------------------------------------------------------------
+    class RendererSubsystem : public Subsystem {
     public:
         bool Init(const BootConfig& config) override;
         void Shutdown() override;
     };
 
-    class GuiSubsystem : public Subsystem
-    {
+    class GuiSubsystem : public Subsystem {
     public:
-        void Use(std::function<bool()> init, std::function<void()>shutdown);
+        // The editor's two functions, taken from Options before start-up.
+        void Use(std::function<bool()> init, std::function<void()> shutdown);
 
         bool Init(const BootConfig& config) override;
         void Shutdown() override;
@@ -180,15 +192,13 @@ private:
         std::function<void()> m_shutdown;
     };
 
-    class InputSubsystem : public Subsystem
-    {
+    class InputSubsystem : public Subsystem {
     public:
         bool Init(const BootConfig& config) override;
         void Shutdown() override;
     };
 
-    class SceneSubsystem : public Subsystem
-    {
+    class SceneSubsystem : public Subsystem {
     public:
         bool Init(const BootConfig& config) override;
         void Shutdown() override;
@@ -200,41 +210,46 @@ private:
         void Shutdown() override;
     };
 
+    // ------------------------------------------------------------------
+    //  THE TWELVE SUBSYSTEM OBJECTS, in the order they start.
+    //
+    //  Members rather than globals, so they are created and destroyed with the
+    //  engine and not in whatever order the linker felt like. Declared BEFORE
+    //  m_subsystems on purpose: members are destroyed in reverse order, so the
+    //  list of pointers is torn down before the objects it points at.
+    // ------------------------------------------------------------------
 
     Log m_log;
-    FileSystem m_filesystem;
+    FileSystem m_fileSystem;
     Window m_window;
     RendererSubsystem m_renderer;
-    GuiSubsystem m_gui; //Editor
-
-
-    //InputSubsystem m_input;
-    //ResourceManager m_resources;
-    //Gizmos m_gismos;
-    //MessageBus m_messaging;
-    //ScriptLibrary m_scripts;
+    GuiSubsystem m_gui;
+    InputSubsystem m_input;
+    ResourceManager m_resources;
+    Gizmos m_gizmos;
+    MessageBus m_messaging;
+    ScriptLibrary m_scripts;
     SceneSubsystem m_sceneSubsystem;
-    //CollisionSubsystem m_collisionSubsystem;
+    CollisionSubsystem m_collisionSubsystem;
 
-    SubsystemStack          m_subsystems;
-    BootConfig              m_config;
-    Json                    m_configDocument = Json::object();
-    //std::unique_ptr<Window> m_window;
-    std::unique_ptr<Scene>  m_scene;
+    SubsystemStack m_subsystems;
+    BootConfig m_config;
+    Json m_configDocument = Json::object();
+    std::unique_ptr<Scene> m_scene;
 
     std::unique_ptr<CollisionSystem> m_collisionSystem;
-    std::unique_ptr<SpinSystem>      m_spinSystem;
-    std::unique_ptr<ScriptSystem>    m_scriptSystem;
+    std::unique_ptr<SpinSystem> m_spinSystem;
+    std::unique_ptr<ScriptSystem> m_scriptSystem;
 
     EventPump m_events;
-    Camera    m_camera;
+    Camera m_camera;
     GameClock m_clock;
 
     double m_lastFrameTicks = 0.0;
-    int    m_stepsThisFrame = 0;
-    bool   m_initialized    = false;
-    bool   m_quitRequested  = false;
-    bool   m_inPlayMode     = false;
+    int m_stepsThisFrame = 0;
+    bool m_initialised = false;
+    bool m_quitRequested = false;
+    bool m_inPlayMode = false;
 
     // The scene as it was when Play was pressed, so Stop can put it back.
     std::string m_playModeSnapshot;

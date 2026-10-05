@@ -49,7 +49,7 @@ public:
     void OnDetach() override;
 
     float RadiansPerSecond() const { return m_radiansPerSecond; }
-    void  SetRadiansPerSecond(float rate) { m_radiansPerSecond = rate; }
+    void SetRadiansPerSecond(float rate) { m_radiansPerSecond = rate; }
 
 private:
     float m_radiansPerSecond = 0.0f;
@@ -63,13 +63,13 @@ private:
 // SystemOrder.h calls out by name.
 class SpinSystem final : public System {
 public:
-    void        Update(float deltaSeconds) override;
-    const char* Name() const override  { return "SpinSystem"; }
-    int         Order() const override { return SystemStage::kMovement; }
+    void Update(float deltaSeconds) override;
+    const char* Name() const override { return "SpinSystem"; }
+    int Order() const override { return SystemStage::kMovement; }
 
-    static void        Register(SpinComponent& spin);
-    static void        Unregister(SpinComponent& spin);
-    static void        Clear();
+    static void Register(SpinComponent& spin);
+    static void Unregister(SpinComponent& spin);
+    static void Clear();
     static std::size_t Count();
 
     // Tells the ComponentFactory that "SpinComponent" in a scene file means

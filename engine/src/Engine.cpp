@@ -50,13 +50,13 @@ bool Engine::GuiSubsystem::Init(const BootConfig&)
 void Engine::GuiSubsystem::Use(std::function < bool()> init, std::function<void()> shutdown)
 {
     m_init = std::move(init);
-    m_shutdown = std::move(init);
+    m_shutdown = std::move(shutdown);
 }
 
 void Engine::GuiSubsystem::Shutdown()
 {
     if (m_shutdown)
-        m_shutdown;
+        m_shutdown();
 }
 
 bool Engine::InputSubsystem::Init(const BootConfig&) {
@@ -144,7 +144,7 @@ void Engine::CollisionSubsystem::Shutdown() {
 void Engine::RegisterBuiltinSubsystems(const Options& options) {
 
     m_subsystems.Add("Log", m_log);
-    m_subsystems.Add("FileSystem", m_filesystem);
+    m_subsystems.Add("FileSystem", m_fileSystem);
     m_subsystems.Add("Window", m_window);
     m_subsystems.Add("Renderer", m_renderer);
     
@@ -153,13 +153,13 @@ void Engine::RegisterBuiltinSubsystems(const Options& options) {
         m_subsystems.Add("EditorGui", m_gui);
     }
 
-    //m_subsystems.Add("Input", m_input);
-    //m_subsystems.Add("Resources", m_resources);
-    //m_subsystems.Add("Gizmos", m_gismos);
-    //m_subsystems.Add("Messaging", m_messaging);
-    //m_subsystems.Add("Scripts", m_scripts);
+    m_subsystems.Add("Input", m_input);
+    m_subsystems.Add("Resources", m_resources);
+    m_subsystems.Add("Gizmos", m_gizmos);
+    m_subsystems.Add("Messaging", m_messaging);
+    m_subsystems.Add("Scripts", m_scripts);
     m_subsystems.Add("Scene", m_sceneSubsystem);
-    //m_subsystems.Add("Collisions", m_collisionSubsystem);
+    m_subsystems.Add("Collisions", m_collisionSubsystem);
 
 }
 
@@ -167,7 +167,7 @@ void Engine::RegisterBuiltinSubsystems(const Options& options) {
 // order, sets the clock, and loads the starting scene. Returns false if the
 // engine cannot run at all.
 bool Engine::Init(const Options& options) {
-    m_filesystem.Init(m_config);
+    m_fileSystem.Init(m_config);
 
     std::string configError;
     if (!LoadBootConfig(options.configPath, m_config, m_configDocument, configError)) {
@@ -199,21 +199,21 @@ bool Engine::Init(const Options& options) {
     }
 
     m_lastFrameTicks = static_cast<double>(SDL_GetPerformanceCounter());
-    m_initialized = true;
+    m_initialised = true;
     ENGINE_LOG_INFO(Channels::kCore, "engine ready");
     return true;
 }
 
 // Stops everything, in the exact reverse of the order it was started in.
 void Engine::Shutdown() {
-    if (!m_initialized) {
+    if (!m_initialised) {
         m_subsystems.ShutdownAll();
         return;
     }
     ENGINE_LOG_INFO(Channels::kCore, "shutting engine down");
     SystemScheduler::Clear();
     m_subsystems.ShutdownAll();
-    m_initialized = false;
+    m_initialised = false;
 
     SDL_Quit();
 
@@ -222,26 +222,91 @@ void Engine::Shutdown() {
 // Replaces the current scene with the one in the named file, and moves the
 // camera to wherever that file says it should be.
 bool Engine::LoadScene(std::string_view virtualPath, std::string& outError) {
-
-
-    return false;
+    if (m_scene == nullptr) {
+        outError = "the scene subsystem is not running";
+        return false;
+    }
+    if (!m_scene->Load(virtualPath, outError)) {
+        return false;
+    }
+    m_camera.SetPosition(m_scene->InitialCameraPosition());
+    m_camera.SetZoom(m_scene->InitialCameraZoom());
+    return true;
 }
 
-// Writes the current scene back out to a file, including where the camera is.
-bool Engine::SaveScene(std::string_view /*virtualPath*/, std::string& /*outError*/) {
-    return false;
+bool Engine::SaveScene(std::string_view virtualPath, std::string& outError) {
+    if (m_scene == nullptr) {
+        outError = "the scene subsystem is not running";
+        return false;
+    }
+
+    const std::string target =
+        virtualPath.empty() ? m_scene->SourcePath() : std::string(virtualPath);
+    if (target.empty()) {
+        outError = "this scene has never been saved anywhere; use Save Scene As";
+        return false;
+    }
+
+    // The live camera goes in FIRST, so that framing a shot in the editor and
+    // pressing save keeps the framing. Doing it here rather than inside
+    // Scene::Save means the scene does not have to know a camera exists.
+    m_scene->SetCameraState(m_camera.Position(), m_camera.Zoom());
+
+    return m_scene->Save(target, outError);
 }
 
-// Takes a snapshot of the scene and starts running it. The snapshot is what
-// makes pressing Play safe on a level you have been building.
-bool Engine::EnterPlayMode(std::string& /*outError*/) {
-    return false;
+// ---------------------------------------------------------------------------
+//  Play mode
+// ---------------------------------------------------------------------------
+
+bool Engine::EnterPlayMode(std::string& outError) {
+    if (m_inPlayMode || m_scene == nullptr) {
+        return m_inPlayMode;
+    }
+    if (!m_scene->SaveToString(m_playModeSnapshot, outError)) {
+        // Refuse rather than play unsafely. Entering play mode without a
+        // snapshot means Stop cannot put the scene back, and silently turning
+        // a safe action into a destructive one is the worst possible failure
+        // for this feature.
+        ENGINE_LOG_ERROR(Channels::kEditor,
+                         "cannot enter play mode, because the scene could not be "
+                         "snapshotted: {}",
+                         outError);
+        return false;
+    }
+    m_inPlayMode = true;
+    m_clock.SetPaused(false);
+    ENGINE_LOG_INFO(Channels::kEditor, "play mode started");
+    return true;
 }
 
-// Stops play mode and puts the snapshot back, undoing everything the running
-// game did to the scene.
 void Engine::ExitPlayMode() {
+    if (!m_inPlayMode) {
+        return;
+    }
+    m_inPlayMode = false;
+    m_clock.SetPaused(true);
+
+    // Anything still queued belongs to the play session and must not be
+    // applied to the restored scene - a destroy queued on the last frame of
+    // play would otherwise delete an entity in the freshly restored one.
+    DeferredOps::Clear();
+    MessageBus::Clear();
+
+    if (m_scene != nullptr && !m_playModeSnapshot.empty()) {
+        std::string error;
+        if (!m_scene->LoadFromString(m_playModeSnapshot, error)) {
+            ENGINE_LOG_ERROR(Channels::kEditor,
+                             "play mode ended but the scene could not be restored: {}", error);
+        } else {
+            ENGINE_LOG_INFO(Channels::kEditor, "play mode stopped; scene restored");
+        }
+        m_camera.SetPosition(m_scene->InitialCameraPosition());
+        m_camera.SetZoom(m_scene->InitialCameraZoom());
+    }
+    m_playModeSnapshot.clear();
 }
+
 
 // Starts one frame: measures real time, reads input, and works out how many
 // fixed simulation steps this frame owes. Returns false when it is time to quit.

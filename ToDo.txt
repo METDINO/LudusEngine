@@ -1,24 +1,18 @@
 
 input /
 		InputMap.cpp
-
 resource / 
 		ResourceManager.cpp
-
 render /
 		Camera.cpp
 		Gizmos.cpp
-
 math /
 		Mat3.cpp
 		Overlap.cpp
 		Random.cpp
 		Transform.cpp
-
 physics /
 		Collider.cpp
-
-
 scene / 
 		Component.cpp
 		DeferredOps.cpp
