@@ -26,6 +26,7 @@ std::set<EntityId> g_pendingDestroy;
 
 void DeferredOps::QueueDestroy(EntityId id) {
     if (id.IsNull()) {
+        ENGINE_LOG_WARN(Channels::kScene, "ID was null");
         return;
     }
     // RULE 3: queueing the same destroy twice is ignored rather than treated

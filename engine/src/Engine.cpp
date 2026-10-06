@@ -336,17 +336,49 @@ bool Engine::BeginFrame() {
 // Runs the simulation steps this frame owes, in system order: gameplay,
 // movement, collision, messages, create/destroy, camera.
 void Engine::Simulate() {
+    for (int step = 0; step < m_stepsThisFrame; ++step) {
+        const float fixedStep = m_clock.FixedStepSeconds();
 
+        // Stages 100 - 500
+        SystemScheduler::UpdateRange(0, SystemStage::kCollisionResponse, fixedStep);
 
+        //Stage 500
+        MessageBus::Dispatch();
+
+        // Stage 600
+        if (m_scene != nullptr) {
+            DeferredOps::Apply(*m_scene);
+        }
+
+        //Stage 700 -  the Camera
+        SystemScheduler::UpdateRange(SystemStage::kDeferred + 1, SystemStage::kFirstRenderStage,
+                                     fixedStep);
+
+        m_clock.OnStepConsumed();
+    }
 }
 
 // Draws the world through any camera into whatever is currently being drawn
 // into. The editor calls this twice - once per view.
-void Engine::RenderWorld(Camera& /*camera*/, bool /*includeGizmos*/) {
+void Engine::RenderWorld(Camera& camera, bool includeGizmos) {
+    camera.SetViewportSize(Renderer::OutputSize());
+
+    Renderer::Clear(Color{18,18,18,255});
+
+    SpriteRenderSystem::Render(camera);
+
+    SystemScheduler::RenderPass(m_clock.RealDeltaSeconds());
+
+    if (includeGizmos) {
+        Gizmos::Render(camera);
+    }
 }
 
 // Draws one frame for the standalone game, gizmos included.
 void Engine::RenderFrame() {
+    RenderWorld(m_camera, /*includeGizmos=*/ true);
+
+    Gizmos::EndFrame(m_clock.RealDeltaSeconds());
 }
 
 // Shows the frame that was just drawn.
