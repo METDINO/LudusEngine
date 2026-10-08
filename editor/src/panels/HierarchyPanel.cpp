@@ -8,6 +8,7 @@
 #include "EditorApp.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <cstdio>
 
@@ -177,7 +178,17 @@ void HierarchyPanel::Draw() {
     eng::Scene& scene = eng::Engine::Get().GetScene();
     const ImGuiIO& io = ImGui::GetIO();
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && ImGui::IsMouseHoveringRect()
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !io.WantTextInput) {
+        auto curWindow = ImGui::GetCurrentWindow()->Rect();
+
+        if (!ImGui::IsMouseHoveringRect(curWindow.Min, curWindow.Max)) {
+            return;
+        }
+
+        if (auto entity = eng::Engine::Get().GetScene().Get(EditorState::Get().selected)) {
+            eng::DeferredOps::QueueDestroy(entity->Id());
+        }
+    }
 
     if (ImGui::Button("+ Create Entity")) {
         const eng::EntityId created = scene.CreateEntity(scene.MakeUniqueName("Entity"));
