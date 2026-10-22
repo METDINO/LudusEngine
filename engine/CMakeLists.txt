@@ -3,7 +3,7 @@
 #
 #  This builds a STATIC LIBRARY, not a program you can run. It knows nothing
 #  about any particular game: no entity names, no level layouts, no rules.
-#  The `sandbox` and `editor` targets are the programs, and both are built on
+#  The `player` and `editor` targets are the programs, and both are built on
 #  top of this.
 #
 #  Every new .cpp file has to be added to ENGINE_SOURCES below or it simply
@@ -21,6 +21,7 @@ set(ENGINE_SOURCES
     src/core/LogBuffer.cpp            # the copy the Console window shows
     src/core/Subsystem.cpp            # ordered start-up and shutdown
 
+    src/fs/AssetArchive.cpp           # packing a folder of assets into one .bin
     src/fs/FileSystem.cpp             # finding and reading files
 
     src/input/InputMap.cpp            # key presses -> named actions
@@ -43,6 +44,7 @@ set(ENGINE_SOURCES
     src/resource/ResourceManager.cpp  # loading images
     src/resource/StbImage.cpp         # compiles the .png/.jpg decoder, once
 
+    src/scene/BuildScenes.cpp         # which scenes ship, and in what order
     src/scene/Component.cpp           # components, the factory, sprites
     src/scene/DeferredOps.cpp         # safe create and destroy
     src/scene/Entity.cpp

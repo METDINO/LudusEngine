@@ -12,7 +12,7 @@
 //  the world is worked out through its parent's transform. That is what the
 //  parent/child transform tree in Transform2D.h buys.
 //
-//  So in assets/scenes/orbit_test.json:
+//  So in assets/scenes/orbit_test.oscene:
 //     the root spins   -> the planet (its child, offset sideways) ORBITS the centre
 //     the planet spins -> the moon (its child) orbits the planet, and the
 //                         planet visibly turns as well

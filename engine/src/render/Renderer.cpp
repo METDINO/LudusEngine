@@ -237,7 +237,7 @@ void Renderer::DrawText(Vec2 topLeft, const char* text, Color color) {
 // ---------------------------------------------------------------------------
 
 void Renderer::DrawSprite(const TextureRef& texture, Vec2 centre, Vec2 size,
-                          float rotationDegrees, Color tint) {
+                          float rotationDegrees, Color tint, const SpriteRect* source) {
     if (g_renderer == nullptr) { return; }
 
     // A TextureRef can be empty (nobody assigned a sprite yet) or can point at
@@ -255,11 +255,31 @@ void Renderer::DrawSprite(const TextureRef& texture, Vec2 centre, Vec2 size,
     SDL_SetTextureAlphaMod(sdlTexture, tint.a);
     SDL_SetTextureBlendMode(sdlTexture, SDL_BLENDMODE_BLEND);
 
+    // WHICH PART OF THE IMAGE. SDL reads nullptr as "all of it", so the two
+    // cases are one pointer that is either set or left alone - no second
+    // branch, and no need to look up the texture's size to describe "all of
+    // it" by hand.
+    //
+    // A rectangle with no width or height is refused here and falls back to
+    // the whole image. That case means somebody has a frame they never sliced,
+    // and drawing the entire sheet in its place is a symptom you cannot miss.
+    // Drawing nothing would be invisible, and an invisible symptom is one you
+    // go looking for in the wrong file.
+    SDL_FRect  src{};
+    SDL_FRect* srcPtr = nullptr;
+    if (source != nullptr && source->w > 0 && source->h > 0) {
+        src = SDL_FRect{static_cast<float>(source->x), static_cast<float>(source->y),
+                        static_cast<float>(source->w), static_cast<float>(source->h)};
+        srcPtr = &src;
+    }
+
     // SDL wants the top-left corner and a size; the caller gave us a centre.
+    // The DESTINATION, which `source` does not affect - the region is stretched
+    // to fill this rectangle whatever its own size is.
     SDL_FRect  dst{centre.x - size.x * 0.5f, centre.y - size.y * 0.5f, size.x, size.y};
     SDL_FPoint pivot{size.x * 0.5f, size.y * 0.5f};   // turn about the middle
 
-    SDL_RenderTextureRotated(g_renderer, sdlTexture, nullptr, &dst,
+    SDL_RenderTextureRotated(g_renderer, sdlTexture, srcPtr, &dst,
                              static_cast<double>(rotationDegrees), &pivot,
                              SDL_FLIP_NONE);
 }

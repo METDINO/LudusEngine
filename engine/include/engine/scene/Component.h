@@ -19,7 +19,7 @@
 //
 //  COMPONENTS ARE BUILT FROM DATA
 //  Every setting a component has reaches it through Deserialize, reading the
-//  scene file. Adding another sprite to a level is an edit to a .json file,
+//  scene file. Adding another sprite to a level is an edit to a text file,
 //  not to C++. If it were not, the whole component model would be pointless.
 //
 //  REGISTRATION HAPPENS IN OnAttach/OnDetach, NOT IN THE CONSTRUCTOR

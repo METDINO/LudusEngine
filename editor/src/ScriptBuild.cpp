@@ -187,6 +187,36 @@ fs::path SourceListFile() {
     return BuildDirectory() / "sources.txt";
 }
 
+// The configuration the current library was built for. See CurrentBuildStamp.
+fs::path BuildStampFile() {
+    return BuildDirectory() / "buildconfig.txt";
+}
+
+// How the current build would compile scripts, as a short piece of text to
+// compare against the last build.
+//
+// WHY THIS EXISTS: a script library is only usable by an engine built the same
+// way. Debug and Release use different C runtimes, and a script compiled
+// against one and loaded into the other is a program with two heaps in it -
+// it loads successfully, reports success, and then crashes on the first
+// allocation that crosses the boundary.
+//
+// That is not hypothetical. Before this check, exporting a Release game picked
+// up a Debug-built library, the log said "loaded 9 script(s)", and the game
+// died with an access violation before it drew a frame. Nothing in the source
+// set or the timestamps had changed, so nothing thought a rebuild was needed.
+//
+// The engine library's PATH is in here as well as the runtime flavour, because
+// the Debug and Release builds put engine.lib in different folders - so this
+// one string catches both "the configuration changed" and "you are pointing at
+// a different build of the engine".
+std::string CurrentBuildStamp() {
+    std::string stamp;
+    stamp += ENGINE_SCRIPT_IS_DEBUG ? "crt=/MDd\n" : "crt=/MD\n";
+    stamp += "enginelib=" + EngineLinkLibrary().string() + "\n";
+    return stamp;
+}
+
 // Which class names each file registered, as of the last successful build.
 //
 // This is what lets a rebuild notice that a file which used to define `Player`
@@ -486,6 +516,17 @@ bool ScriptBuild::NeedsRebuild() {
         return true;   // scripts exist and nothing has been built yet
     }
 
+    // WAS IT BUILT FOR THIS CONFIGURATION?
+    //
+    // Checked before the timestamps, because this is the case timestamps
+    // cannot see: switching between the Debug and Release presets changes
+    // nothing about the scripts themselves, so every source is still older
+    // than the library and nothing looks out of date - while the library is
+    // now unusable. See CurrentBuildStamp.
+    if (CurrentBuildStamp() != ReadWholeFile(BuildStampFile())) {
+        return true;
+    }
+
     // Did the SET of scripts change? This is what notices a deleted or renamed
     // file, which a timestamp comparison cannot.
     std::string current;
@@ -692,6 +733,14 @@ ScriptBuild::Result ScriptBuild::BuildAndReload() {
         for (const std::string& source : allSources) {
             list << source << "\n";
         }
+    }
+
+    // And WHAT it was built as, so switching preset is noticed later. Written
+    // only after a successful compile, so a failed build does not leave a
+    // stamp claiming the library matches this configuration.
+    {
+        std::ofstream stamp(BuildStampFile(), std::ios::trunc);
+        stamp << CurrentBuildStamp();
     }
 
     // ---- load the result --------------------------------------------------

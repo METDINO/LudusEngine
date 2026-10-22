@@ -2,14 +2,14 @@
   "_comment": "The settings the engine reads when it starts. Change a value, save, and run again - no rebuilding. config/engine.example.json is the documented copy; this is the one that is actually read.",
 
   "window": {
-    "title": "Engine2D",
+    "title": "Orion Engine",
     "width": 1280,
     "height": 720
   },
 
   "logging": {
     "_note": "threshold hides anything less important than the level you name. Info, Warning or Error.",
-    "threshold": "Info",
+    "threshold": "Error",
     "file": "logs/engine.log"
   },
 
@@ -22,7 +22,7 @@
   },
 
   "startup": {
-    "scene": "scenes/orbit_test.json"
+    "scene": "scenes/orbit_test.oscene"
   },
 
   "input": {

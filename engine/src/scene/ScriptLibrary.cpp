@@ -26,30 +26,68 @@ std::string g_loadedPath;
 
 } // namespace
 
-std::string ScriptLibrary::DefaultVirtualPath() {
-    // Every script in the project is compiled into this one library.
-    //
-    // It sits in .build/ beside assets/ rather than inside it. Your scripts
-    // live in assets/, next to the scenes and images they belong with - but
-    // the compiled result is not something you wrote and not something to
-    // browse, and putting it in the tree the Assets panel shows would just be
-    // clutter you have to learn to ignore.
-    //
-    // This is the ONE definition of the name, used by the engine that loads it
-    // and by the editor that writes it, so there is never a question of which
-    // file is the current one.
+namespace {
+
+// The platform's name for a dynamically loaded library.
+const char* LibraryFileName() {
 #if defined(_WIN32)
-    return ".build/userContent.dll";
+    return "userContent.dll";
+#elif defined(__APPLE__)
+    return "userContent.dylib";
 #else
-    return ".build/userContent.so";
+    return "userContent.so";
 #endif
+}
+
+} // namespace
+
+std::string ScriptLibrary::DefaultVirtualPath() {
+    // Where the EDITOR writes it: beside the object files and the build script
+    // it generates, which is what .build/ is for. See the header for why a
+    // shipped game uses a different place.
+    return std::string(".build/") + LibraryFileName();
+}
+
+std::string ScriptLibrary::ShippedVirtualPath() {
+    // Where a BUILT GAME keeps it. No folder prefix, so FileSystem::Resolve
+    // puts it under assets/ with the rest of the game's content - see the
+    // header.
+    return LibraryFileName();
+}
+
+std::string ScriptLibrary::FindLibraryPath() {
+    // THE BUILD FOLDER IS CHECKED FIRST, and the order is deliberate.
+    //
+    // In a shipped game .build/ does not exist, so this falls straight through
+    // to the packed one and costs nothing. In a project being developed the
+    // editor has just rebuilt .build/, and checking it first means a stale
+    // assets/userContent.dll - committed by accident, or left behind by
+    // someone who exported into their own project once - can never shadow the
+    // library the editor just compiled. Loading yesterday's scripts while the
+    // Console reports a successful build is a bad afternoon.
+    if (FileSystem::Exists(DefaultVirtualPath())) {
+        return DefaultVirtualPath();
+    }
+    if (FileSystem::Exists(ShippedVirtualPath())) {
+        return ShippedVirtualPath();
+    }
+    return {};
 }
 
 bool ScriptLibrary::Init(const BootConfig&) {
     // A project with no scripts is fine and returns true. Only a library that
     // exists and will not load is a failure.
+    const std::string path = FindLibraryPath();
+    if (path.empty()) {
+        ENGINE_LOG_INFO(Channels::kScene,
+                        "no compiled scripts found (looked for '{}' and '{}') - write "
+                        "one in the Assets panel and the editor will build it",
+                        DefaultVirtualPath(), ShippedVirtualPath());
+        return true;
+    }
+
     std::string error;
-    return Load(DefaultVirtualPath(), error);
+    return Load(path, error);
 }
 
 void ScriptLibrary::Shutdown() {

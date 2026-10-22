@@ -1,0 +1,607 @@
+{
+  "_comment": "The sample game, and it is ENTIRELY data plus scripts - there is no C++ anywhere in the project that knows this game exists. Adding an eleventh collectible needs no code change: copy a Pickup entity and change its position. GameRules counts the colliders on the Pickup layer rather than assuming a number. Because it is all scripts, it plays the same whether you press Play in the editor or launch the player executable.",
+  "_layers": "Player, Pickup and World are collision layer names. Two colliders are only tested against each other when EACH one's collidesWith list includes the other's layer - see engine/include/engine/physics/Collider.h.",
+  "camera": {
+    "position": [
+      0.0,
+      0.0
+    ],
+    "zoom": 1.0
+  },
+  "entities": [
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            3.0,
+            3.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 5,
+          "texture": "textures/Blue/Blue_walk_1.png",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Pickup",
+            "World"
+          ],
+          "halfExtents": [
+            16.0,
+            16.0
+          ],
+          "layer": "Player",
+          "trigger": false,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "PlayerMovement",
+          "type": "ScriptComponent"
+        },
+        {
+          "script": "CameraFollow",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Player"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -360.0,
+            220.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup00"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -180.0,
+            260.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup01"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            40.0,
+            250.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup02"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            250.0,
+            200.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup03"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            420.0,
+            90.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup04"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            380.0,
+            -120.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup05"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            150.0,
+            -240.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup06"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -90.0,
+            -270.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup07"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -330.0,
+            -190.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup08"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -440.0,
+            20.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.6000000238418579,
+            0.6000000238418579
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 1,
+          "texture": "textures/checker_red.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "collidesWith": [
+            "Player"
+          ],
+          "halfExtents": [
+            11.0,
+            11.0
+          ],
+          "layer": "Pickup",
+          "trigger": true,
+          "type": "AABBColliderComponent"
+        },
+        {
+          "script": "Pickup",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "Pickup09"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            -430.0,
+            -250.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "radiansPerSecond": 0.699999988079071,
+          "type": "SpinComponent"
+        }
+      ],
+      "name": "Beacon"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            60.0,
+            0.0
+          ],
+          "rotation": 0.4000000059604645,
+          "scale": [
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 0,
+          "texture": "textures/checker_blue.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        },
+        {
+          "radiansPerSecond": -1.2000000476837158,
+          "type": "SpinComponent"
+        }
+      ],
+      "name": "BeaconArm",
+      "parent": "Beacon"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            40.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            0.5,
+            0.5
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "layer": 2,
+          "texture": "textures/marker_up.bmp",
+          "tint": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "type": "SpriteComponent"
+        }
+      ],
+      "name": "BeaconTip",
+      "parent": "BeaconArm"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "script": "GameRules",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "GameRules"
+    }
+  ],
+  "name": "Collector"
+}

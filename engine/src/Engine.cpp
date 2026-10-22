@@ -268,8 +268,29 @@ bool Engine::Init(const Options& options) {
 
     SystemScheduler::LogOrder();
 
-    const std::string scene =
-        options.sceneOverride.empty() ? m_config.startupScene : options.sceneOverride;
+    // WHICH SCENE THE GAME OPENS WITH, decided in this order:
+    //
+    //   1. --scene on the command line, because somebody asking for a
+    //      specific scene right now outranks anything written down.
+    //   2. index 0 of the build list, which is what the Build panel sets and
+    //      what a shipped game normally uses.
+    //   3. "startup.scene" in config/engine.json, so a project that predates
+    //      the Build panel keeps working exactly as it did.
+    //
+    // See scene/BuildScenes.h. The list is read here rather than by a
+    // subsystem because it is not one - it is a few lines of data that only
+    // this decision and LoadSceneByIndex care about.
+    std::string buildListError;
+    BuildScenes::Load(buildListError);
+
+    std::string scene = options.sceneOverride;
+    if (scene.empty() && BuildScenes::Count() > 0) {
+        scene = BuildScenes::PathAt(0);
+    }
+    if (scene.empty()) {
+        scene = m_config.startupScene;
+    }
+
     if (!scene.empty()) {
         std::string sceneError;
         if (!LoadScene(scene, sceneError)) {
@@ -311,6 +332,20 @@ void Engine::Shutdown() {
 // ---------------------------------------------------------------------------
 //  Scenes
 // ---------------------------------------------------------------------------
+
+bool Engine::LoadSceneByIndex(std::size_t index, std::string& outError) {
+    if (index >= BuildScenes::Count()) {
+        outError = "there is no scene " + std::to_string(index) + " in the build list; " +
+                   (BuildScenes::Count() == 0
+                        ? "the list is empty, so nothing has been added in the Build panel"
+                        : "it holds " + std::to_string(BuildScenes::Count()) +
+                              " scene(s), numbered 0 to " +
+                              std::to_string(BuildScenes::Count() - 1));
+        ENGINE_LOG_ERROR(Channels::kScene, "{}", outError);
+        return false;
+    }
+    return LoadScene(BuildScenes::PathAt(index), outError);
+}
 
 bool Engine::LoadScene(std::string_view virtualPath, std::string& outError) {
     if (m_scene == nullptr) {

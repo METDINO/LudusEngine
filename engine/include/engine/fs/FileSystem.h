@@ -14,7 +14,7 @@
 //
 //  THE FIX: VIRTUAL PATHS
 //  Everything in the engine names files the short way - "textures/player.bmp",
-//  "scenes/level1.json" - and this class works out the real location at run
+//  "scenes/level1.oscene" - and this class works out the real location at run
 //  time. It does that by starting at the program's own location and walking
 //  UP the folder tree until it finds one containing an `assets` folder.
 //
@@ -52,6 +52,23 @@ public:
     static std::string Resolve(std::string_view virtualPath);
 
     static bool Exists(std::string_view virtualPath);
+
+    // Does this path end with this extension - ".oscene", ".png" - IGNORING
+    // CAPITALS?
+    //
+    // Ignoring them is the whole point. Nobody controls the case of a file
+    // name reliably: Windows treats "Boss.OSCENE" and "boss.oscene" as the
+    // same file while Linux does not, and an image exported from a camera or a
+    // paint program frequently arrives as .PNG. A rule that matched only lower
+    // case would make the same file visible to one part of the editor and
+    // invisible to another.
+    //
+    // That is not hypothetical - it is the bug this function was added to end.
+    // ListFiles used to compare exactly while the asset browser ignored
+    // capitals, so a scene saved as .OSCENE appeared in the Assets panel and
+    // never showed up in the Open Scene menu, with nothing anywhere to explain
+    // the difference.
+    static bool HasExtension(std::string_view virtualPath, std::string_view extension);
 
     // Lists the files directly inside a folder, giving back VIRTUAL paths that
     // can be handed straight back to ReadFile or Scene::Load.

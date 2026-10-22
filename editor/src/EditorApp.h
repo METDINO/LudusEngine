@@ -66,7 +66,13 @@ struct EditorState {
 class EditorApp {
 public:
     bool Init();
-    void Run();
+    // `frameLimit` of 0 means "until the window is closed", which is what a
+    // person always wants. A positive number runs that many frames and then
+    // shuts down normally, which is what an automated check wants: it proves
+    // the editor starts, draws, and takes itself down cleanly - including
+    // writing its session file, which only happens in Shutdown. The player
+    // has the same option for the same reason.
+    void Run(int frameLimit = 0);
     void Shutdown();
 
     // One line to add a panel. Really one line.
@@ -77,7 +83,7 @@ private:
     void DrawPanels();
 
     // The list of scenes in the File menu is DISCOVERED from assets/scenes/
-    // rather than written down, so dropping a .json in there puts it in the
+    // rather than written down, so dropping a .oscene in there puts it in the
     // menu with no rebuild.
     void RefreshSceneList();
     void LoadScene(const std::string& virtualPath);

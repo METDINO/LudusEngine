@@ -57,7 +57,7 @@ struct BootConfig {
     // Even the first level is data. A scene name compiled into the engine
     // would be a piece of game content living in the engine, which is exactly
     // the thing the engine/game split exists to prevent.
-    std::string startupScene = "scenes/orbit_test.json";
+    std::string startupScene = "scenes/orbit_test.oscene";
 };
 
 // Reads config/engine.json.
@@ -71,5 +71,4 @@ struct BootConfig {
 // somebody actually wrote. A missing file is not a failure.
 bool LoadBootConfig(std::string_view virtualPath, BootConfig& outConfig,
                     Json& outDocument, std::string& outError);
-
 } // namespace eng

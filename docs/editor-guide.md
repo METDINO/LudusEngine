@@ -163,8 +163,8 @@ editor while the game runs.
 
 ## Editing a scene
 
-**File → Open Scene** lists everything in `assets/scenes/`. Dropping a `.json`
-in there puts it in the menu with no rebuild.
+**File → Open Scene** lists everything in `assets/scenes/`. Dropping a
+`.oscene` in there puts it in the menu with no rebuild.
 
 **File → Save Scene**, or **Ctrl+S**. **Save Scene As...** for a new file. The
 menu bar shows **UNSAVED** once anything has been changed.

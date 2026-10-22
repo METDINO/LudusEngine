@@ -1,0 +1,17 @@
+{
+  "_comment": "Extra files for File -> Build Game... to pack. You probably do not need this.",
+
+  "_how_the_exporter_decides": "Building a game packs ONLY the assets the game refers to - never everything sitting in assets/. The exporter reads every .oscene file and packs each file they name, plus textures/missing.bmp, which the engine loads by name. Everything else stays on your machine: reference art, asset packs bought for a later level, half-finished sprites. That is on purpose. A folder beside a game is something a player can open, and shipping what you did not mean to is how unannounced content and other people's licensed art get out.",
+
+  "_when_you_need_this_file": "Exactly one case. A script that builds a path while it runs - LoadTexture(\"textures/enemies/\" + kind + \".png\") - refers to a file that NO scene mentions, so the exporter cannot know about it and the exported game will draw the magenta missing-texture square instead. List those files here.",
+
+  "_format": "Each entry is a virtual path, the same short form the rest of the engine uses. A file packs that one file. A FOLDER packs everything inside it, at any depth, except script source. Delete the examples and add your own.",
+
+  "_examples": [
+    "textures/ui",
+    "textures/enemies/boss_reveal.png"
+  ],
+
+  "include": [
+  ]
+}

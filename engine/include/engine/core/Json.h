@@ -1,11 +1,16 @@
 #pragma once
 
 // ============================================================================
-//  Json.h - reading and writing the .json files the engine uses.
+//  Json.h - reading and writing the JSON files the engine uses.
 //
 //  Two kinds of file are stored as JSON:
-//    config/engine.json   settings: window size, key bindings, log level
-//    assets/scenes/*.json scenes: every entity and every component in a level
+//    config/engine.json      settings: window size, key bindings, log level
+//    assets/scenes/*.oscene  scenes: every entity and every component in a level
+//
+//  NOTE THE SECOND EXTENSION IS NOT .json EVEN THOUGH THE CONTENTS ARE. A
+//  level is JSON inside and named .oscene outside, so that the engine can tell
+//  a level from the other JSON under assets/ - texture and spritesheet
+//  metadata - without opening it. See Scene.h.
 //
 //  WHY JSON
 //  It is plain text, so a scene can be opened in any editor, read, diffed and

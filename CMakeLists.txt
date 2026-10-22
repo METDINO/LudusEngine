@@ -11,7 +11,7 @@
 #                    any particular game. Shared rather than static because a
 #                    project's scripts link against it at run time; the reason
 #                    is written out in engine/CMakeLists.txt.
-#      sandbox/      the game, running on its own.
+#      player/       a game, running on its own - the export template.
 #      editor/       the development environment.
 #      tests/        the unit tests. 
 #
@@ -76,7 +76,7 @@ include(cmake/Dependencies.cmake)      # downloads SDL, ImGui, JSON and doctest
 include(cmake/CompilerWarnings.cmake)  # what the compiler should complain about
 
 add_subdirectory(engine)
-add_subdirectory(sandbox)
+add_subdirectory(player)
 
 if(ENGINE_WITH_IMGUI)
     add_subdirectory(editor)

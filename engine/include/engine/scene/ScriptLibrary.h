@@ -60,10 +60,34 @@ public:
     bool Init(const BootConfig& config) override;
     void Shutdown() override;
 
-    // The file name the editor builds and this loads, for the platform being
-    // run on - ".build/userContent.dll" on Windows, ".so" on Linux,
-    // ".dylib" on macOS. A virtual path, so it resolves the same way anywhere.
+    // ---- where the compiled scripts live ---------------------------------
+    //
+    // THERE ARE TWO PLACES, because a project being developed and a game that
+    // has shipped want different things from the same file.
+    //
+    //   WHILE DEVELOPING: .build/userContent.dll, beside the object files, the
+    //     build script and the source list the editor writes next to it. It is
+    //     build output, it is in .gitignore with the rest of the build output,
+    //     and it is regenerated whenever a script changes.
+    //
+    //   IN A BUILT GAME: assets/userContent.dll, beside the packed scenes and
+    //     textures. A shipped game has no build folder and should not look as
+    //     though it does - a hidden directory called .build sitting next to
+    //     the executable reads as leftover rubbish, and on Linux and macOS it
+    //     is literally hidden from the person who just unzipped the game.
+    //
+    //     The compiled game code living in the data folder is also what Unity
+    //     does, for what it is worth: <Game>_Data/Managed/.
+    //
+    // Both are VIRTUAL paths, so each resolves the same way on every platform
+    // and from any working directory. The extension differs per platform -
+    // .dll, .so, .dylib - which is why these are functions and not constants.
     static std::string DefaultVirtualPath();
+    static std::string ShippedVirtualPath();
+
+    // The one of the two above that actually exists, or an empty string when
+    // neither does. This is what Init loads, and what the editor shows.
+    static std::string FindLibraryPath();
 
     // Loads the compiled scripts, unloading anything already loaded first, and
     // rebinds every ScriptComponent in the current scene by name.

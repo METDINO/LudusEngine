@@ -82,10 +82,10 @@ another one.
 
 ## Ideas the engine keeps coming back to
 
-**Data, not code.** Every entity, every position, every image and every key
-binding lives in a `.json` file. Search the engine's source for the name of
-anything in a scene and you will not find it. That is what lets somebody build
-a level without writing C++.
+**Data, not code.** Every entity, every position and every image lives in a
+`.oscene` scene file; every key binding lives in `config/engine.json`. Both are
+JSON. Search the engine's source for the name of anything in a scene and you
+will not find it. That is what lets somebody build a level without writing C++.
 
 **Refer to entities by id, not by pointer.** Entities get destroyed while other
 things are still referring to them. An `EntityId` can be CHECKED; a pointer to
@@ -109,7 +109,8 @@ are printed to the log at start-up, so it is never a guess.
 
 ## The two programs, and the third library
 
-`sandbox` is the game with no editor attached. `editor` is the development
+`player` runs a game with no editor attached, and contains no game itself — the
+scene file and the scripts under `assets/` are the game. `editor` is the development
 environment. Both are built on the same `engine`, which is a **shared** library
 - one copy of it in the process, shared by everything.
 

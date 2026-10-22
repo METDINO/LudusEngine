@@ -30,7 +30,7 @@
 
   "startup": {
     "_note": "The scene opened when the game starts. Even the first level is data - there is no scene name written into the engine anywhere.",
-    "scene": "scenes/orbit_test.json"
+    "scene": "scenes/orbit_test.oscene"
   },
 
   "input": {

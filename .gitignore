@@ -57,6 +57,12 @@ logs/
 # A window arrangement is a personal preference, not source.
 imgui.ini
 
+# And .editor/ to remember where it was when you closed it - which scene was
+# open, what was selected, where the Scene view was looking. The same argument
+# as imgui.ini: it is one person's place in the work, and committing it would
+# mean every pull moved somebody else's camera. See editor/src/EditorSession.h.
+.editor/
+
 # ---- OS noise --------------------------------------------------------------
 .DS_Store
 Thumbs.db

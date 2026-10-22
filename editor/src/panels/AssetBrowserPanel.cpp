@@ -22,8 +22,8 @@ namespace {
 // folder structure suits the game.
 //
 // THE ASSETS ROOT IS THE EMPTY STRING, and that is not a shortcut. Virtual
-// paths are ALREADY relative to assets/ - "scenes/level1.json" resolves to
-// <project>/assets/scenes/level1.json - so the virtual path OF assets/ itself
+// paths are ALREADY relative to assets/ - "scenes/level1.oscene" resolves to
+// <project>/assets/scenes/level1.oscene - so the virtual path OF assets/ itself
 // is "". Writing "assets" here would ask for <project>/assets/assets.
 constexpr const char* kRootAssets = "";
 

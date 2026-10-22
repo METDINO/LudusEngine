@@ -29,6 +29,7 @@
 #include <engine/core/Log.h>
 #include <engine/core/LogBuffer.h>
 #include <engine/core/Subsystem.h>
+#include <engine/fs/AssetArchive.h>
 #include <engine/fs/FileSystem.h>
 #include <engine/input/InputMap.h>
 #include <engine/math/Mat3.h>
@@ -44,6 +45,7 @@
 #include <engine/render/Renderer.h>
 #include <engine/render/Texture.h>
 #include <engine/resource/ResourceManager.h>
+#include <engine/scene/BuildScenes.h>
 #include <engine/scene/Component.h>
 #include <engine/scene/DeferredOps.h>
 #include <engine/scene/Entity.h>
@@ -133,6 +135,24 @@ public:
     // Loads a different scene at a safe moment, applying the camera settings
     // the scene file asked for.
     bool LoadScene(std::string_view virtualPath, std::string& outError);
+
+    // Loads a scene by its NUMBER in the build list - see
+    // scene/BuildScenes.h. This is what lets a script say "the next level"
+    // without repeating a file name somebody will rename:
+    //
+    //     eng::Engine::Get().LoadSceneByIndex(2, error);
+    //
+    // Fails with a readable message rather than crashing when the index is
+    // past the end of the list, because that is a mistake in a script and a
+    // script's mistake belongs in the Console.
+    //
+    // CAUTION, and it is the same caution LoadScene carries: loading destroys
+    // every entity in the current scene. Calling this from inside a script's
+    // OnUpdate pulls the ground out from under the system that is part way
+    // through calling it. Until the engine has a deferred scene load, a script
+    // that wants to change level should set a flag of its own and act on it at
+    // the top of the next step.
+    bool LoadSceneByIndex(std::size_t index, std::string& outError);
 
     // The opposite: pushes the LIVE camera into the scene, then writes it out.
     // Pass an empty path to save over wherever it came from.

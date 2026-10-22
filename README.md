@@ -67,7 +67,7 @@ ctest --preset debug
 | ------------- | ------------------------------------------------------------------- |
 | `engine`      | The engine, as a SHARED library. Knows nothing about any game.       |
 | `editor`      | The development environment - Scene view, Game view, seven panels.   |
-| `sandbox`     | The game running on its own, with no editor.                         |
+| `player`      | A game running on its own, with no editor. Contains no game itself.  |
 | `tests`       | The unit tests.                                                      |
 
 **The project's scripts are not on that list, and that is the point.**
@@ -90,25 +90,34 @@ build/debug/bin/Debug/editor
 That is the one to start with. See [docs/editor-guide.md](docs/editor-guide.md).
 
 ```bash
-build/debug/bin/Debug/sandbox
+build/debug/bin/player
 ```
 
-The game on its own. It opens the scene named in `config/engine.json` - an
-orbiting three-level hierarchy built entirely by the data file.
+A game on its own, with no editor. It opens scene 0 of the build list - see the
+editor's **Build** panel - falling back to the scene named in
+`config/engine.json`.
 
-| Command                       | What it does                                    |
-| ----------------------------- | ----------------------------------------------- |
-| `sandbox`                     | open the scene from `config/engine.json`        |
-| `sandbox --game`              | play the sample game                            |
-| `sandbox --autoplay`          | the same game, played automatically             |
-| `sandbox --scene <path>`      | open a different scene                          |
-| `sandbox --frames <N>`        | run N frames then exit                          |
-| `sandbox --help`              | the full list                                   |
+**It contains no game.** There is no player, no score and no level name
+anywhere in `player/`. The scene file places the entities and the scripts under
+`assets/scripts/` give them their behaviour, which is why the same executable
+is what every game built with this engine ships as.
 
-`--game` is **Collector**: move with WASD or the arrow keys and touch the ten
-red squares before the timer runs out. `--autoplay` finishes a round in about
-twelve seconds by pressing the same named actions the keyboard is bound to - so
-it exercises the real input path rather than going round it.
+| Command                      | What it does                                    |
+| ---------------------------- | ----------------------------------------------- |
+| `player`                     | open scene 0 of the build list                  |
+| `player --scene <path>`      | open a different scene                          |
+| `player --scene-index <N>`   | open scene N of the build list                  |
+| `player --config <path>`     | use a different settings file                   |
+| `player --frames <N>`        | run N frames then exit                          |
+| `player --help`              | the full list                                   |
+
+The sample game is **Collector**: move with WASD or the arrow keys and touch
+the ten red squares before the timer runs out. It is built entirely from a
+scene file and four scripts - `Pickup`, `GameRules`, `PlayerMovement` and
+`CameraFollow` - so it plays identically whether you press Play in the editor
+or launch the player. Attach `Autopilot` to the Player in the Inspector and it
+plays itself, by pressing the same named actions the keyboard is bound to
+rather than going round the input layer.
 
 ---
 
@@ -118,7 +127,7 @@ it exercises the real input path rather than going round it.
 | -------------- | ----------------------------------------------------------------- |
 | `engine/`      | The engine, built as a shared library.                            |
 | `editor/`      | The development environment. Panels live here.                    |
-| `sandbox/`     | The game. The only place game-shaped code belongs.                |
+| `player/`      | A game running on its own — the export template. Contains no game. |
 | `assets/`      | Scenes, images **and your scripts**, in whatever folders suit the game. **Committed.** |
 | `tests/`       | Unit tests.                                                       |
 | `cmake/`       | Build system pieces.                                              |

@@ -9,9 +9,12 @@
 #include "EditorApp.h"
 
 #include "EditorGui.h"
+#include "EditorSession.h"
+#include "GameExport.h"
 #include "ScriptBuild.h"
 
 #include "panels/AssetBrowserPanel.h"
+#include "panels/BuildPanel.h"
 #include "panels/ConsolePanel.h"
 #include "panels/GamePanel.h"
 #include "panels/HierarchyPanel.h"
@@ -77,7 +80,12 @@ bool EditorApp::Init() {
     AddPanel(std::make_unique<HierarchyPanel>());      // every entity
     AddPanel(std::make_unique<InspectorPanel>());      // the selected entity
     AddPanel(std::make_unique<AssetBrowserPanel>());   // files on disk
+    AddPanel(std::make_unique<BuildPanel>());          // what ships, and in what order
     AddPanel(std::make_unique<ConsolePanel>());        // the log
+
+    // LAST, because it may open a different scene and move the Scene view's
+    // camera - so it needs the engine running and every panel already built.
+    EditorSession::Restore(m_scenePanel);
 
     ENGINE_LOG_INFO(eng::Channels::kEditor, "editor ready with {} panels",
                     m_panels.size());
@@ -89,7 +97,7 @@ void EditorApp::AddPanel(std::unique_ptr<Panel> panel) {
 }
 
 void EditorApp::RefreshSceneList() {
-    if (!eng::FileSystem::ListFiles("scenes", ".json", m_sceneList)) {
+    if (!eng::FileSystem::ListFiles("scenes", eng::kSceneExtension, m_sceneList)) {
         ENGINE_LOG_WARN(eng::Channels::kEditor,
                         "could not read assets/scenes/, so the Open Scene menu will be "
                         "empty");
@@ -130,10 +138,26 @@ void EditorApp::DrawSaveAsPopup() {
     const bool submitted =
         ImGui::InputText("##saveaspath", m_saveAsPath, sizeof(m_saveAsPath),
                          ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::TextDisabled("for example: scenes/my_level.json");
+    ImGui::TextDisabled("for example: scenes/my_level%s", eng::kSceneExtension);
 
     if (submitted || ImGui::Button("Save", ImVec2(110, 0))) {
-        SaveScene(m_saveAsPath);
+        // A NAME TYPED WITHOUT THE EXTENSION STILL SAVES A SCENE.
+        //
+        // Typing "scenes/boss" used to write a file called exactly that, with
+        // no extension at all - which then failed every test for "is this a
+        // scene?". So the save succeeded, said so in the status bar, and the
+        // file never appeared in the Open Scene menu again. Work that has been
+        // saved and cannot be found is worse than a save that refuses, and the
+        // person it happens to has no reason to suspect the file name.
+        //
+        // An EMPTY box is left alone rather than turned into ".oscene".
+        // SaveScene({}) already means "save where it came from", which is the
+        // sane reading of clearing the box and pressing Save.
+        std::string path(m_saveAsPath);
+        if (!path.empty() && !eng::FileSystem::HasExtension(path, eng::kSceneExtension)) {
+            path += eng::kSceneExtension;
+        }
+        SaveScene(path);
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
@@ -166,8 +190,8 @@ void EditorApp::DrawMenuBar() {
     if (ImGui::BeginMenu("File")) {
         eng::Scene& scene = eng::Engine::Get().GetScene();
 
-        // The list of scenes is DISCOVERED, not written down. Dropping a .json
-        // into assets/scenes/ puts it in this menu with no rebuild.
+        // The list of scenes is DISCOVERED, not written down. Dropping a
+        // .oscene into assets/scenes/ puts it in this menu with no rebuild.
         if (ImGui::BeginMenu("Open Scene")) {
             // Read when the menu is opened rather than every frame: it touches
             // the disk, and scanning a folder sixty times a second for a menu
@@ -217,8 +241,13 @@ void EditorApp::DrawMenuBar() {
         if (ImGui::MenuItem("Save Scene As...", nullptr, false, scene.IsLoaded())) {
             // Pre-filled with the current name, so "save a variant of this" is
             // an edit rather than retyping the whole path.
-            std::snprintf(m_saveAsPath, sizeof(m_saveAsPath), "%s",
-                          hasPath ? scene.SourcePath().c_str() : "scenes/untitled.json");
+            if (hasPath) {
+                std::snprintf(m_saveAsPath, sizeof(m_saveAsPath), "%s",
+                              scene.SourcePath().c_str());
+            } else {
+                std::snprintf(m_saveAsPath, sizeof(m_saveAsPath), "scenes/untitled%s",
+                              eng::kSceneExtension);
+            }
             m_openSaveAsPopup = true;
         }
         ImGui::EndDisabled();
@@ -233,6 +262,30 @@ void EditorApp::DrawMenuBar() {
         ImGui::EndDisabled();
 
         ImGui::Separator();
+        ImGui::Separator();
+
+        // BUILD THE GAME. Asks for a folder and copies a standalone game into
+        // it - see GameExport.h for what that folder contains and why.
+        //
+        // The dialog is opened here but the export is NOT run here. The folder
+        // picker answers later, possibly on another thread, and exporting
+        // rebuilds the scripts - which replaces the library the running
+        // scene's script objects live in. Both reasons point the same way: the
+        // work happens at the top of a frame, in Run(). It is the same
+        // argument requestedScene makes, and the editor does not get an
+        // exemption from its own rules.
+        if (ImGui::MenuItem("Build Game...")) {
+            GameExport::AskForDestination();
+            std::snprintf(m_status, sizeof(m_status), "choose a folder to build into");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Builds the scripts and copies a standalone game - the "
+                              "player, the engine, your assets and your settings - into "
+                              "a folder you choose.");
+        }
+
+        ImGui::Separator();
+
         if (ImGui::MenuItem("Exit")) {
             eng::Engine::Get().RequestQuit();
         }
@@ -359,15 +412,65 @@ void EditorApp::RebuildScriptsIfChanged() {
     eng::Log::Flush();
 }
 
-void EditorApp::Run() {
+void EditorApp::Run(int frameLimit) {
     eng::Engine& engine = eng::Engine::Get();
 
+    int frames = 0;
+
     while (engine.BeginFrame()) {
+        if (frameLimit > 0 && frames++ >= frameLimit) {
+            break;
+        }
+
         // The user alt-tabbed back to the editor. That is the moment to check
         // whether any script was edited while it was in the background - see
         // ScriptBuild.h for why this is the natural trigger.
         if (engine.Events().FocusGainedThisFrame()) {
             RebuildScriptsIfChanged();
+        }
+
+        // The folder picker from File -> Build Game... answers whenever the
+        // user gets round to it, so it is COLLECTED here rather than waited
+        // for. This spot is deliberate: it is the same point in the frame
+        // where a script rebuild is already known to be safe, and exporting
+        // rebuilds the scripts.
+        // EVERY OUTCOME IS REPORTED, including the two that used to be silent.
+        // A Build that does nothing and says nothing is the worst way for this
+        // to fail, and the failure is invisible precisely when somebody most
+        // needs to know - see GameExport::Choice.
+        //
+        // These go to the log at ERROR rather than Info or Warning on purpose.
+        // config/engine.json sets a threshold, and when it is "Error" - as it
+        // is in this project right now - every Info and Warning line is
+        // dropped before it reaches the Console panel OR the log file. A
+        // problem with something the user just asked for has to survive that.
+        switch (const GameExport::Pending pending = GameExport::TakePending();
+                pending.choice) {
+            case GameExport::Choice::None:
+                break;
+
+            case GameExport::Choice::Cancelled:
+                std::snprintf(m_status, sizeof(m_status), "build cancelled");
+                break;
+
+            case GameExport::Choice::Failed:
+                std::snprintf(m_status, sizeof(m_status), "the folder picker failed");
+                ENGINE_LOG_ERROR(eng::Channels::kEditor,
+                                 "the folder picker could not run: {}", pending.error);
+                break;
+
+            case GameExport::Choice::Chosen: {
+                const GameExport::Result exported = GameExport::ExportTo(pending.path);
+                std::snprintf(m_status, sizeof(m_status), "%s", exported.summary.c_str());
+                if (!exported.ok) {
+                    ENGINE_LOG_ERROR(eng::Channels::kEditor, "build failed: {}",
+                                     exported.summary);
+                } else {
+                    ENGINE_LOG_INFO(eng::Channels::kEditor, "build finished: {} -> {}",
+                                     exported.summary, pending.path);
+                }
+                break;
+            }
         }
 
         // ==================================================================
@@ -452,6 +555,14 @@ void EditorApp::Run() {
 }
 
 void EditorApp::Shutdown() {
+    // THE SESSION IS SAVED FIRST, while there is still something to read.
+    //
+    // It needs the Scene view's camera, which lives in a panel, and the open
+    // scene's path, which lives in the engine - so it has to happen before
+    // either of them is taken down. Putting this one line after m_panels.clear()
+    // would compile perfectly and quietly save nothing but a null camera.
+    EditorSession::Save(m_scenePanel);
+
     // Panels before the engine. A panel's destructor may still reach engine
     // state, so it has to go first - the same reverse-order rule the engine
     // applies to its own subsystems.

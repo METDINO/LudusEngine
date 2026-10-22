@@ -8,8 +8,14 @@
 #include "EditorGui.h"
 
 #include <engine/core/Log.h>
+#include <engine/fs/FileSystem.h>
 #include <engine/platform/Window.h>
 #include <engine/tools/GuiHooks.h>
+
+#include <filesystem>
+#include <string>
+#include <system_error>
+#include <vector>
 
 #include <SDL3/SDL.h>
 
@@ -25,6 +31,46 @@ bool          g_initialised = false;
 SDL_Renderer* g_renderer    = nullptr;
 bool          g_gameFocus   = false;
 bool          g_layoutBuilt = false;
+
+// Moves a pre-existing imgui.ini to the place the editor now keeps it.
+//
+// ONE-TIME AND BEST-EFFORT. It runs only when there is no layout in the new
+// place and one in an old place, so it cannot overwrite anything, and every
+// failure is ignored: the worst outcome is the panels starting in their
+// default arrangement, which is not worth a message on the way up.
+//
+// Two old places are looked at, because those are the two directories the
+// editor gets launched from: the project root, and the folder the executable
+// sits in. Whichever is found first is copied.
+void AdoptLegacyIniIfPresent(const std::string& newPath) {
+    std::error_code ec;
+    if (std::filesystem::exists(newPath, ec)) {
+        return;
+    }
+
+    std::vector<std::filesystem::path> candidates;
+    candidates.emplace_back(std::filesystem::path(eng::FileSystem::AssetRoot()) /
+                            "imgui.ini");
+    if (const char* base = SDL_GetBasePath(); base != nullptr && base[0] != '\0') {
+        candidates.emplace_back(std::filesystem::path(base) / "imgui.ini");
+    }
+
+    for (const std::filesystem::path& old : candidates) {
+        if (!std::filesystem::exists(old, ec)) {
+            continue;
+        }
+        std::filesystem::create_directories(
+            std::filesystem::path(newPath).parent_path(), ec);
+        std::filesystem::copy_file(old, newPath,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            ENGINE_LOG_INFO(eng::Channels::kEditor,
+                            "moved your panel layout from '{}' to '{}'", old.string(),
+                            newPath);
+        }
+        return;
+    }
+}
 
 // ---------------------------------------------------------------------------
 //  The three functions the engine calls to find out whether the interface
@@ -74,6 +120,35 @@ bool EditorGui::Init(eng::Window& window) {
     }
 
     ImGuiIO& io = ImGui::GetIO();
+
+    // ---- WHERE THE PANEL LAYOUT IS REMEMBERED -----------------------------
+    //
+    // ImGui's default is the bare name "imgui.ini", which it opens relative to
+    // the CURRENT DIRECTORY. That means the file lands wherever the editor
+    // happened to be launched from: one copy beside the executable when you
+    // run it from build/debug/bin, another in the project root when you run it
+    // from there, and the arrangement you get depends on which. Rearranging
+    // the panels and finding them moved back the next day is the symptom, and
+    // nothing about it points at the cause.
+    //
+    // Resolved through FileSystem instead, so it is the same file every time
+    // however the editor was started - and put in .editor/ beside the session
+    // file, because a panel layout is exactly the same kind of thing: one
+    // person's state, not the project's. See editor/src/EditorSession.h.
+    //
+    // THE STRING HAS TO OUTLIVE THIS FUNCTION. io.IniFilename is a const char*
+    // that ImGui stores and reads for the rest of the program's life - it does
+    // not copy it - so a local std::string here would leave ImGui reading freed
+    // memory on the first frame. Hence the static.
+    static std::string iniPath;
+    iniPath         = eng::FileSystem::Resolve(".editor/imgui.ini");
+    io.IniFilename  = iniPath.c_str();
+
+    // A FIRST RUN AFTER THIS CHANGE WOULD OTHERWISE LOSE THE LAYOUT, because
+    // the old file is still sitting where ImGui used to look. Moved once,
+    // quietly, rather than making somebody rebuild an arrangement they had
+    // already got right.
+    AdoptLegacyIniIfPresent(iniPath);
 
     // DOCKING IS NOT ON BY DEFAULT. Without this line the panels float freely,
     // cannot be tabbed together, and no arrangement is remembered.

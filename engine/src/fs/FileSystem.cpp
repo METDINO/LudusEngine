@@ -24,7 +24,10 @@
 #endif
 
 #include <engine/core/Log.h>
+#include <engine/fs/AssetArchive.h>
 #include <engine/fs/FileSystem.h>
+
+#include <cctype>
 
 #include <SDL3/SDL.h>
 
@@ -54,6 +57,27 @@ bool LooksLikeRoot(const fs::path& directory) {
     return fs::is_directory(directory / "assets", ec);
 }
 
+// Could this virtual path live inside an archive?
+//
+// Two things cannot, and neither is an arbitrary choice:
+//
+//    logs/        is written, not read. An archive is read-only.
+//    .build/      holds the compiled script library, and SDL_LoadObject needs
+//                 a real path on disk to hand to the operating system. There
+//                 is no "load a DLL from memory" worth the trouble here.
+//
+// .editor/ is excluded for the same reason as logs/ - it is written.
+//
+// config/ CAN be archived, and in an exported game it is - packed into
+// scenes.bin, because "startup.scene" decides which level the game opens with
+// and a settings file sitting loose beside the executable is an invitation to
+// change that. The settings travel with the scenes they choose between.
+bool CouldBeArchived(std::string_view virtualPath) {
+    return !virtualPath.starts_with("logs/") && !virtualPath.starts_with(".build/") &&
+           virtualPath != ".build" && !virtualPath.starts_with(".editor/") &&
+           virtualPath != ".editor";
+}
+
 } // namespace
 
 bool FileSystem::Init(const BootConfig&) {
@@ -72,6 +96,7 @@ bool FileSystem::Init(const BootConfig&) {
             g_root = candidate.string();
             ENGINE_LOG_INFO(Channels::kFileSys,
                             "asset folder taken from ENGINE_ASSET_ROOT: '{}'", g_root);
+            AssetArchive::MountAll(Resolve(""));   // see the note below
             return true;
         }
         ENGINE_LOG_WARN(Channels::kFileSys,
@@ -103,6 +128,17 @@ bool FileSystem::Init(const BootConfig&) {
         if (LooksLikeRoot(current)) {
             g_root = current.string();
             ENGINE_LOG_INFO(Channels::kFileSys, "assets found in '{}'", g_root);
+
+            // Any .bin archives sitting in assets/ are mounted now, before
+            // anything asks for a file. An exported game finds its archives
+            // here; a project being developed finds none, which is not an
+            // error - it just means every read goes to disk as it always did.
+            if (const int mounted = AssetArchive::MountAll(Resolve("")); mounted > 0) {
+                ENGINE_LOG_INFO(Channels::kFileSys,
+                                "{} asset archive(s) mounted; packed assets will be "
+                                "read in preference to loose files",
+                                mounted);
+            }
             return true;
         }
         if (!current.has_parent_path() || current.parent_path() == current) {
@@ -119,6 +155,10 @@ bool FileSystem::Init(const BootConfig&) {
 }
 
 void FileSystem::Shutdown() {
+    // Let go of the archive index too, so a second Init in the same process -
+    // which is what the editor does when it builds scripts headlessly - does
+    // not inherit the last run's mounts.
+    AssetArchive::UnmountAll();
     g_root.clear();
     ENGINE_LOG_INFO(Channels::kFileSys, "file system shut down");
 }
@@ -141,8 +181,14 @@ std::string FileSystem::Resolve(std::string_view virtualPath) {
     // assets/, wherever you like, alongside the scenes and images they belong
     // with - but the compiled result of them is not something you wrote and
     // not something to browse, so it does not sit in the same tree.
+    //   .editor/      the editor's own remembered state - which scene was
+    //                 open, where the Scene view was looking. Generated,
+    //                 per-person, and nothing to do with the game, which is
+    //                 why it is neither in config/ (authored, and packed into
+    //                 builds) nor in .build/ (output of the script compiler).
     if (virtualPath.starts_with("config/") || virtualPath.starts_with("logs/") ||
-        virtualPath.starts_with(".build/") || virtualPath == ".build") {
+        virtualPath.starts_with(".build/") || virtualPath == ".build" ||
+        virtualPath.starts_with(".editor/") || virtualPath == ".editor") {
         path = fs::path(g_root) / fs::path(std::string(virtualPath));
     }
 
@@ -150,7 +196,43 @@ std::string FileSystem::Resolve(std::string_view virtualPath) {
     return path.lexically_normal().string();
 }
 
+// Does this path end with this extension - ".oscene", ".png" - IGNORING
+// CAPITALS?
+//
+// Ignoring them is the whole point. Nobody controls the case of a file name
+// reliably: Windows treats "Boss.OSCENE" and "boss.oscene" as the same file
+// while Linux does not, and an image exported from a camera frequently arrives
+// as .PNG. A rule that matched only lower case would make the same file
+// visible to one part of the editor and invisible to another.
+//
+// std::tolower is handed an `unsigned char` rather than the char itself because
+// it is only defined for values that fit in one, and char is SIGNED on this
+// compiler - so an accented character arrives negative and the behaviour is
+// undefined. The cast is not decoration.
+bool FileSystem::HasExtension(std::string_view virtualPath, std::string_view extension) {
+    if (extension.size() > virtualPath.size()) {
+        return false;
+    }
+    const std::size_t offset = virtualPath.size() - extension.size();
+    for (std::size_t i = 0; i < extension.size(); ++i) {
+        const int a = std::tolower(static_cast<unsigned char>(virtualPath[offset + i]));
+        const int b = std::tolower(static_cast<unsigned char>(extension[i]));
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool FileSystem::Exists(std::string_view virtualPath) {
+    // ARCHIVES FIRST, THEN DISK, and that order is the whole design. An
+    // exported game has archives and no loose assets; the editor has loose
+    // assets and no archives; a developer testing an export in place could
+    // have both, and then the archive is what the player will actually get.
+    if (AssetArchive::AnyMounted() && CouldBeArchived(virtualPath) &&
+        AssetArchive::Contains(virtualPath)) {
+        return true;
+    }
     std::error_code ec;
     return fs::exists(Resolve(virtualPath), ec);
 }
@@ -162,29 +244,55 @@ bool FileSystem::ListFiles(std::string_view virtualDirectory, std::string_view e
     const std::string real = Resolve(virtualDirectory);
 
     std::error_code ec;
-    if (!fs::is_directory(real, ec)) {
-        ENGINE_LOG_WARN(Channels::kFileSys, "'{}' is not a folder (looked in '{}')",
+    const bool      haveFolder = fs::is_directory(real, ec);
+
+    // A MISSING FOLDER IS NOT YET A FAILURE. An exported game has no loose
+    // scenes/ folder at all - it has scenes.bin - so the folder genuinely is
+    // not there and the archive below is the right answer. Only the case where
+    // neither exists is worth complaining about.
+    if (haveFolder) {
+        std::string prefix(virtualDirectory);
+        if (!prefix.empty() && prefix.back() != '/') {
+            prefix.push_back('/');
+        }
+
+        for (const fs::directory_entry& entry : fs::directory_iterator(real, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            const std::string name = entry.path().filename().string();
+            if (!extension.empty() && !HasExtension(name, extension)) {
+                continue;
+            }
+            // VIRTUAL paths are returned, not real ones. A caller handed a real
+            // path would have to know not to pass it back to ReadFile, which
+            // would resolve it a second time and produce a doubled-up path.
+            out.push_back(prefix + name);
+        }
+    }
+
+    // AND WHATEVER AN ARCHIVE HOLDS for the same folder. An exported game has
+    // no loose scenes/ folder, so without this a level-select menu built from
+    // ListFiles would come back empty in the shipped game and work perfectly
+    // in the editor - the worst shape a bug can have.
+    if (AssetArchive::AnyMounted()) {
+        std::vector<std::string> archived;
+        AssetArchive::ListFolder(virtualDirectory, archived);
+        for (std::string& path : archived) {
+            if (!extension.empty() && !HasExtension(path, extension)) {
+                continue;
+            }
+            if (std::find(out.begin(), out.end(), path) == out.end()) {
+                out.push_back(std::move(path));
+            }
+        }
+    }
+
+    if (!haveFolder && out.empty()) {
+        ENGINE_LOG_WARN(Channels::kFileSys,
+                        "'{}' is not a folder and no archive holds it (looked in '{}')",
                         virtualDirectory, real);
         return false;
-    }
-
-    std::string prefix(virtualDirectory);
-    if (!prefix.empty() && prefix.back() != '/') {
-        prefix.push_back('/');
-    }
-
-    for (const fs::directory_entry& entry : fs::directory_iterator(real, ec)) {
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        const std::string name = entry.path().filename().string();
-        if (!extension.empty() && !name.ends_with(extension)) {
-            continue;
-        }
-        // VIRTUAL paths are returned, not real ones. A caller handed a real
-        // path would have to know not to pass it back to ReadFile, which would
-        // resolve it a second time and produce a doubled-up path.
-        out.push_back(prefix + name);
     }
 
     // The order a folder listing comes back in is up to the operating system.
@@ -271,6 +379,20 @@ bool FileSystem::CreateDirectory(std::string_view virtualDirectory, std::string&
 
 bool FileSystem::ReadTextFile(std::string_view virtualPath, std::string& outText,
                               std::string& outError) {
+    // From an archive when one holds it. Text and bytes are the same thing to
+    // an archive, so this borrows the binary read and then says "those bytes
+    // are characters" - which is all a text file ever was.
+    if (AssetArchive::AnyMounted() && CouldBeArchived(virtualPath) &&
+        AssetArchive::Contains(virtualPath)) {
+        std::vector<unsigned char> bytes;
+        if (!AssetArchive::Read(virtualPath, bytes, outError)) {
+            return false;
+        }
+        outText.assign(bytes.begin(), bytes.end());
+        outError.clear();
+        return true;
+    }
+
     const std::string real = Resolve(virtualPath);
 
     std::ifstream file(real);
@@ -292,6 +414,11 @@ bool FileSystem::ReadTextFile(std::string_view virtualPath, std::string& outText
 
 bool FileSystem::ReadFile(std::string_view virtualPath, std::vector<unsigned char>& outBytes,
                           std::string& outError) {
+    if (AssetArchive::AnyMounted() && CouldBeArchived(virtualPath) &&
+        AssetArchive::Contains(virtualPath)) {
+        return AssetArchive::Read(virtualPath, outBytes, outError);
+    }
+
     const std::string real = Resolve(virtualPath);
 
     // std::ios::binary means "do not translate anything" - essential for an

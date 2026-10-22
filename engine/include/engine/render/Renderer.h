@@ -46,6 +46,26 @@ struct Color {
     friend constexpr bool operator==(const Color&, const Color&) = default;
 };
 
+// A rectangle inside a texture: WHICH PART of the image to draw.
+//
+// This is the whole basis of a spritesheet. One .png holding sixteen 32x32
+// pictures is sixteen different sprites as far as the game is concerned, and
+// the only thing that tells them apart is four numbers.
+//
+// MEASURED IN THE IMAGE'S OWN PIXELS, FROM ITS TOP-LEFT CORNER, WITH Y
+// POINTING DOWN. That is not the coordinate system anything else about a
+// sprite uses. The `centre` and `size` handed to DrawSprite are SCREEN pixels,
+// worked out through the camera; these four numbers never go near the camera,
+// because they are not a position in the world - they are a position in a
+// file. Putting the y value through the camera's flip is the first mistake
+// everybody makes here, and it shows up as frames that are upside down.
+//
+// Integers rather than floats because image pixels are counted, not measured.
+struct SpriteRect {
+    int x = 0, y = 0;   // top-left corner, in image pixels
+    int w = 0, h = 0;   // size, in image pixels
+};
+
 // A picture that can be drawn INTO instead of drawn onto the window.
 //
 // This is what makes the editor's Scene view and Game view possible at the
@@ -129,8 +149,19 @@ public:
     // Draws a texture centred on `centre`, `size` pixels across, turned by
     // `rotationDegrees` clockwise (which is the direction SDL rotates).
     // `tint` multiplies the image's colours, so White() draws it unchanged.
+    //
+    // `source` picks ONE REGION of the image to draw - a single frame out of a
+    // spritesheet. nullptr means the whole image, which is what it defaults to
+    // and what every caller wanted before spritesheets existed. A rectangle
+    // with no width or height is treated the same way, so an unsliced sheet
+    // draws visibly whole rather than invisibly not at all.
+    //
+    // `size` is STILL the size on screen, independently of how big the region
+    // is. A 32x32 frame drawn with size {64, 64} is that frame at double size.
+    // Keeping the two apart is the only reason a sprite can be scaled at all.
     static void DrawSprite(const TextureRef& texture, Vec2 centre, Vec2 size,
-                           float rotationDegrees, Color tint);
+                           float rotationDegrees, Color tint,
+                           const SpriteRect* source = nullptr);
 
     // Engine-internal: the GUI layer and the texture loader both need the
     // underlying SDL renderer. void*, as everywhere else in this layer.

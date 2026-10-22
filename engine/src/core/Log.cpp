@@ -15,6 +15,7 @@
 #include <engine/core/Config.h>
 #include <engine/core/Log.h>
 #include <engine/core/LogBuffer.h>
+#include <engine/fs/FileSystem.h>
 
 #include <chrono>
 #include <cstdio>
@@ -40,15 +41,40 @@ bool     g_initialised = false;
 // clock, and it jumps when the machine syncs its time or the user changes
 // timezone. A timestamp that jumps backwards in the middle of a log file is
 // worse than no timestamp at all.
-std::chrono::steady_clock::time_point g_start;
-
 // Bookkeeping for the flush policy at the bottom of Write().
 double      g_lastFlushSeconds = 0.0;
 std::size_t g_pendingLines     = 0;
 
+// When the clock at the front of every log line started.
+//
+// A FUNCTION-LOCAL STATIC, set the first time anything asks for the time, and
+// never again. That matters for two reasons.
+//
+// IT CANNOT BE UNSET. As a plain variable it was default-constructed to the
+// steady clock's zero - which on Windows is when the machine booted - and
+// anything logged before Log::Init got the elapsed time since then. The symptom
+// was a line reading [129443.275] sitting above lines reading [0.005], and
+// since FileSystem comes up before the log in order to resolve the log's own
+// path, the first line of every run was one of those.
+//
+// AND IT IS NEVER RESET. Log::Init used to set it, which would make the
+// timestamps go BACKWARDS at that point: a line written during start-up would
+// show a larger number than a line written just after it. A log whose clock
+// runs backwards once at the top is worse than one that counts from slightly
+// before the log existed.
+//
+// Initialised on first use rather than at static-initialisation time, so there
+// is no question of which translation unit's statics are ready first - the same
+// reason Engine::Get() and EditorState::Get() are written this way.
+std::chrono::steady_clock::time_point ProgramStart() {
+    static const std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+    return start;
+}
+
 double ElapsedSeconds() {
     const std::chrono::duration<double> elapsed =
-        std::chrono::steady_clock::now() - g_start;
+        std::chrono::steady_clock::now() - ProgramStart();
     return elapsed.count();
 }
 
@@ -97,13 +123,25 @@ bool Log::Init(const BootConfig& config) {
     // How many messages the editor's Console window keeps; see LogBuffer.h.
     LogBuffer::SetCapacity(static_cast<std::size_t>(config.logBufferCapacity));
 
-    g_start            = std::chrono::steady_clock::now();
+    // The clock is NOT started here. See ProgramStart: starting it at this
+    // point would make every timestamp written before now larger than the ones
+    // written after.
     g_lastFlushSeconds = 0.0;
     g_pendingLines     = 0;
     g_threshold        = config.logThreshold;
 
     if (!config.logFile.empty()) {
-        const std::string path(config.logFile);
+        // RESOLVED, NOT USED RAW. "logs/engine.log" opened as a relative path
+        // lands wherever the program was launched FROM, so the editor started
+        // from its own folder and the editor started from the project root
+        // wrote to two different logs - and one started from somewhere
+        // unwritable wrote to none at all and said so only on stderr, which in
+        // a windowed build nobody sees.
+        //
+        // FileSystem::Resolve sends logs/ to the project root, the same place
+        // every time. It is safe to call here because Engine::Init brings the
+        // file system up before any subsystem, including this one.
+        const std::string path = FileSystem::Resolve(config.logFile);
 
         // Create the folder the log file lives in if it is missing, so that a
         // freshly cloned copy of the project writes "logs/engine.log" without

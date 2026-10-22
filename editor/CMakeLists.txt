@@ -3,7 +3,7 @@
 #
 #      engine/       a shared library. Knows nothing about any game or any tool.
 #      editor/       this program. All the panels live here.
-#      sandbox/      the game running on its own, with no editor attached.
+#      player/       a game running on its own, with no editor attached.
 #      assets/       the project's scripts, compiled into a library that both
 #                    programs LOAD at run time.
 #
@@ -22,8 +22,11 @@ set(EDITOR_SOURCES
     src/EditorGui.cpp                    # starting and stopping Dear ImGui
     src/ScriptBuild.cpp                  # finds a compiler and builds the project
     src/AssetDragDrop.cpp                # what happens when you drag a file onto something
+    src/EditorSession.cpp                # remembers where you were when you closed it
+    src/GameExport.cpp                   # File -> Build Game...
     src/ScriptTemplate.cpp               # the starter script the Assets panel writes
     src/panels/AssetBrowserPanel.cpp     # Assets   - the files on disk
+    src/panels/BuildPanel.cpp            # Build    - which scenes ship, which starts
     src/panels/ConsolePanel.cpp          # Console  - the log window
     src/panels/GamePanel.cpp             # Game     - what a player would see
     src/panels/HierarchyPanel.cpp        # Hierarchy- every entity in the scene
@@ -46,7 +49,7 @@ target_include_directories(editor PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 #
 #  SDL comes with it, because ImGui's backends are written against SDL. The
 #  editor is a TOOL, so that is fine - the boundary that matters is that a
-#  GAME cannot reach SDL, and the sandbox still cannot.
+#  GAME cannot reach SDL, and the player still cannot.
 # ---------------------------------------------------------------------------
 target_link_libraries(editor PRIVATE
     Engine2D::engine
@@ -75,6 +78,41 @@ target_compile_definitions(editor PRIVATE
 
 engine_set_warnings(editor)
 
+# ---------------------------------------------------------------------------
+#  THE EDITOR CANNOT EXPORT A GAME WITHOUT THE PLAYER BESIDE IT.
+#
+#  File -> Build Game... copies player.exe out of the editor's own folder and
+#  renames it - see src/GameExport.h. Nothing in the source says the player has
+#  to have been built, so building only the editor produced an editor whose
+#  Build button reported "player.exe is missing" and could not be made to work
+#  without a second, undocumented build step.
+#
+#  That is not a thing to write in a README. It is a dependency, so it is
+#  declared as one: build the editor and the player comes with it, in whatever
+#  configuration you asked for.
+#
+#  This is NOT target_link_libraries - the editor does not link the player and
+#  must not. It is an ordering and existence requirement, which is exactly what
+#  add_dependencies means.
+# ---------------------------------------------------------------------------
+add_dependencies(editor player)
+
+# ---------------------------------------------------------------------------
+#  NO CONSOLE WINDOW beside the editor. The Console panel shows the same log,
+#  with filters and a search box, so the terminal was only ever a duplicate -
+#  and a window the user cannot dock, close or move with the rest of the
+#  interface. See player/CMakeLists.txt for what these two lines do and why
+#  /ENTRY is needed.
+#
+#  BUT THE EDITOR ALSO HAS A COMMAND-LINE MODE: `editor --build-scripts`
+#  compiles the project's scripts and exits, and somebody running that from a
+#  terminal needs to see whether it worked. A /SUBSYSTEM:WINDOWS program is not
+#  attached to the terminal that launched it, so main() reattaches when there
+#  is one - see src/main.cpp.
+# ---------------------------------------------------------------------------
 if(WIN32)
-    set_target_properties(editor PROPERTIES WIN32_EXECUTABLE FALSE)
+    set_target_properties(editor PROPERTIES WIN32_EXECUTABLE TRUE)
+    if(MSVC)
+        target_link_options(editor PRIVATE /ENTRY:mainCRTStartup)
+    endif()
 endif()

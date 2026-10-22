@@ -3,6 +3,16 @@
 // ============================================================================
 //  Scene.h - a level: the entities in it, loaded from and saved to a file.
 //
+//  A SCENE FILE IS NAMED .oscene AND IS JSON INSIDE. Those are two separate
+//  facts and both matter. The contents are ordinary JSON, so any text editor
+//  will colour it and any JSON tool will read it; the EXTENSION is the
+//  engine's own, so that "which of these files is a level?" is answered by the
+//  name rather than by opening every .json under assets/ to find out. Texture
+//  and spritesheet metadata are also JSON, and without a distinct extension
+//  there would be no way to tell a level from a sprite description.
+//
+//  kSceneExtension below is the one place that spelling lives.
+//
 //  A scene file is JSON and looks like this:
 //
 //      {
@@ -44,6 +54,20 @@
 #include <vector>
 
 namespace eng {
+
+// The file extension a level is saved with, dot included.
+//
+// IT LIVES IN ONE PLACE ON PURPOSE. Before this constant existed the spelling
+// was written out separately in the editor's "list the scenes" filter and in
+// its "what kind of file is this?" classifier, and the two were changed at
+// different times - so the Assets panel recognised a scene that the Open Scene
+// menu could not find. Two copies of a fact are two chances to be wrong, and
+// nothing reports the disagreement.
+//
+// Code that MATCHES or GENERATES a scene name uses this. A specific file that
+// exists on disk - "scenes/collector.oscene" - is still written out in full,
+// because renaming the extension would mean renaming that file anyway.
+inline constexpr const char* kSceneExtension = ".oscene";
 
 class Scene {
 public:

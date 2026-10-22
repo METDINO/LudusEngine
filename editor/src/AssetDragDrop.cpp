@@ -45,7 +45,18 @@ AssetKind ClassifyAsset(std::string_view virtualPath) {
         EndsWithNoCase(virtualPath, ".jpg") || EndsWithNoCase(virtualPath, ".jpeg")) {
         return AssetKind::Texture;
     }
-    if (EndsWithNoCase(virtualPath, ".json") && virtualPath.starts_with("scenes/")) {
+    // A scene is recognised by its extension ALONE - there is deliberately no
+    // "and it has to be in scenes/" test any more. .oscene belongs to this
+    // engine and nothing else uses it, so the name is already proof; requiring
+    // a particular folder would only mean a level organised into
+    // scenes/world1/ stopped being draggable for no reason anyone could see.
+    //
+    // Note what is NOT here: plain .json. Scene files used to be .json, which
+    // forced exactly that folder check to tell them apart from every other
+    // JSON file under assets/. Giving levels their own extension is what
+    // freed .json up for texture and spritesheet metadata - which will need
+    // its own branch here when that lands, because it is Unknown today.
+    if (EndsWithNoCase(virtualPath, eng::kSceneExtension)) {
         return AssetKind::Scene;
     }
     return AssetKind::Unknown;
