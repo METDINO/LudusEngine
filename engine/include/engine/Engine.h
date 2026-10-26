@@ -46,6 +46,7 @@
 #include <engine/render/Texture.h>
 #include <engine/resource/ResourceManager.h>
 #include <engine/scene/BuildScenes.h>
+#include <engine/scene/CameraComponent.h>
 #include <engine/scene/Component.h>
 #include <engine/scene/DeferredOps.h>
 #include <engine/scene/Entity.h>
@@ -260,6 +261,11 @@ private:
     std::unique_ptr<CollisionSystem> m_collisionSystem;
     std::unique_ptr<SpinSystem>      m_spinSystem;
     std::unique_ptr<ScriptSystem>    m_scriptSystem;
+
+    // Copies the active camera entity into m_camera once a frame. Registered
+    // with the scheduler like the others, so its place in the frame is one
+    // number rather than a call buried somewhere - see CameraComponent.h.
+    std::unique_ptr<CameraSystem>    m_cameraSystem;
 
     EventPump m_events;
     Camera    m_camera;

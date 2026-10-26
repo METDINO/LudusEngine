@@ -142,9 +142,22 @@ void ScenePanel::Draw() {
         // same idea as Unity's "Align With View". Framing a shot here and then
         // saving is how a scene file gets its starting camera, and without
         // this there would be no way to change it from inside the editor.
-        eng::Camera& gameCamera = eng::Engine::Get().GetCamera();
-        gameCamera.SetPosition(m_camera.Position());
-        gameCamera.SetZoom(m_camera.Zoom());
+        // THE CAMERA ENTITY, when there is one. Writing straight to the
+        // engine's Camera would be undone on the very next frame, because
+        // CameraSystem copies the active camera entity into it - so the
+        // button would appear to do nothing at all. See CameraComponent.h.
+        if (eng::CameraComponent* active = eng::CameraSystem::Active()) {
+            if (eng::Transform2D* transform = active->OwnerTransform()) {
+                transform->SetWorldPosition(m_camera.Position());
+            }
+            active->SetZoom(m_camera.Zoom());
+        } else {
+            // No camera entity: the old path, which still works and is what
+            // a scene written before cameras were entities uses.
+            eng::Camera& gameCamera = eng::Engine::Get().GetCamera();
+            gameCamera.SetPosition(m_camera.Position());
+            gameCamera.SetZoom(m_camera.Zoom());
+        }
         EditorState::Get().dirty = true;
     }
     if (ImGui::IsItemHovered()) {
@@ -516,6 +529,43 @@ void ScenePanel::RenderView() {
 
     eng::Gizmos::Grid(view, kGridSpacing, eng::Color{42, 42, 52, 255});
     eng::Gizmos::OriginAxes(120.0f);
+
+    // ======================================================================
+    //  WHAT THE GAME CAMERA FRAMES, outlined in the Scene view.
+    //
+    //  This is most of the point of making the camera an entity: you can see
+    //  where the shot is without switching to the Game view and guessing.
+    //  The live one is drawn brightly and the others dimly, so a scene with
+    //  two cameras shows at a glance which is which.
+    //
+    //  Measured against the GAME view's size, not this panel's - the box has
+    //  to show what a player would see, and the two panels are rarely the
+    //  same shape.
+    // ======================================================================
+    eng::Scene& scene = eng::Engine::Get().GetScene();
+    const eng::Vec2 gameViewport = eng::Engine::Get().GetCamera().ViewportSize();
+
+    if (gameViewport.x > 0.0f && gameViewport.y > 0.0f) {
+        scene.ForEach([&](eng::Entity& entity) {
+            const auto* camera = entity.Find<eng::CameraComponent>();
+            if (camera == nullptr) {
+                return;
+            }
+
+            const bool live = camera->IsActive();
+            const eng::Color colour =
+                live ? eng::Color{250, 210, 90, 255} : eng::Color{120, 120, 130, 160};
+
+            eng::Gizmos::Box(camera->WorldBounds(gameViewport), colour, 0.0f,
+                             eng::GizmoSpace::World, eng::GizmoCategory::Bounds);
+
+            eng::Gizmos::Text(camera->WorldBounds(gameViewport).min +
+                                  eng::Vec2{4.0f, 4.0f},
+                              live ? entity.Name() + " (live)" : entity.Name(), colour,
+                              0.0f, eng::GizmoSpace::World,
+                              eng::GizmoCategory::Bounds);
+        });
+    }
 
     eng::Engine::Get().RenderWorld(m_camera, /*includeGizmos=*/true);
 

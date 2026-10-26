@@ -86,6 +86,7 @@ private:
     bool  m_openNewFolder     = false;
     char  m_status[256]       = {};
     float m_iconSize          = 72.0f;
+
 };
 
 } // namespace editor

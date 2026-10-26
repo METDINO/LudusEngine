@@ -6,6 +6,7 @@
 
 #include "AssetDragDrop.h"
 #include "EditorApp.h"
+#include "ObjectMenu.h"
 
 #include <imgui.h>
 
@@ -80,6 +81,18 @@ void HierarchyPanel::DrawContextMenu(eng::Entity& entity) {
         return;
     }
     eng::Scene& scene = eng::Engine::Get().GetScene();
+
+    // The same items as the menu bar's Objects menu, from the one list. See
+    // ObjectMenu.h.
+    if (ImGui::BeginMenu("New Object")) {
+        if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
+            EditorState::Get().selected = created;
+            EditorState::Get().dirty    = true;
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::Separator();
 
     if (ImGui::MenuItem("Rename...")) {
         m_renameTarget    = entity.Id();
@@ -176,18 +189,24 @@ void HierarchyPanel::DrawRenamePopup() {
 void HierarchyPanel::Draw() {
     eng::Scene& scene = eng::Engine::Get().GetScene();
 
+    // Routed through the same CreateObject every menu uses, so "an empty
+    // entity" means one thing in one place. See ObjectMenu.h.
     if (ImGui::Button("+ Create Entity")) {
-        const eng::EntityId created = scene.CreateEntity(scene.MakeUniqueName("Entity"));
-        if (!created.IsNull()) {
-            // Put it where the camera is looking, so it is on screen rather
-            // than at the world origin somewhere off in the distance.
-            if (eng::Entity* entity = scene.Get(created); entity != nullptr) {
-                entity->Transform().SetLocalPosition(
-                    eng::Engine::Get().GetCamera().Position());
-            }
+        if (const eng::EntityId created = CreateObject("Empty"); !created.IsNull()) {
             EditorState::Get().selected = created;
             EditorState::Get().dirty    = true;
         }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("+ Object")) {
+        ImGui::OpenPopup("newobject");
+    }
+    if (ImGui::BeginPopup("newobject")) {
+        if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
+            EditorState::Get().selected = created;
+            EditorState::Get().dirty    = true;
+        }
+        ImGui::EndPopup();
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(appears where the camera is looking)");
@@ -244,6 +263,18 @@ void HierarchyPanel::Draw() {
         eng::Gizmos::Text(position + eng::Vec2{-20.0f, 34.0f}, selected->Name(),
                           eng::Color::Yellow(), 0.0f, eng::GizmoSpace::World,
                           eng::GizmoCategory::Bounds);
+    }
+
+    // RIGHT-CLICKING EMPTY SPACE offers the same menu, which is where people
+    // reach for it when the scene is empty and there is no row to click on.
+    if (ImGui::BeginPopupContextWindow("hierarchy-background",
+                                       ImGuiPopupFlags_MouseButtonRight |
+                                           ImGuiPopupFlags_NoOpenOverItems)) {
+        if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
+            EditorState::Get().selected = created;
+            EditorState::Get().dirty    = true;
+        }
+        ImGui::EndPopup();
     }
 
     DrawRenamePopup();

@@ -37,6 +37,7 @@
 #include <engine/core/Log.h>
 #include <engine/fs/FileSystem.h>
 #include <engine/scene/ScriptComponent.h>
+#include <engine/core/ThreadPool.h>
 #include <engine/scene/ScriptLibrary.h>
 
 // SDL is used for one thing: asking where the editor's own executable is, so a
@@ -45,6 +46,9 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <future>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -557,15 +561,31 @@ bool ScriptBuild::NeedsRebuild() {
 //  Building
 // ---------------------------------------------------------------------------
 
-ScriptBuild::Result ScriptBuild::BuildAndReload() {
-    Result result;
+// ============================================================================
+//  A BUILD HAPPENS IN THREE PHASES, AND ONLY THE MIDDLE ONE IS SAFE OFF THE
+//  MAIN THREAD.
+//
+//  This split exists because compiling on a worker thread without it is
+//  quietly disastrous. Unloading the script library DESTROYS every live
+//  script object, and loading it recreates and rebinds them - both while the
+//  main thread may be half way through ticking that same list. The compile
+//  itself touches nothing but files and a compiler process, so that is the
+//  part that can move.
+//
+//    BeginBuild()  main thread   decides, and unloads
+//    Compile()     WORKER        writes the build script, runs the compiler
+//    FinishBuild() main thread   loads the result and rebinds
+//
+//  BuildAndReload() runs all three in order and is what the synchronous
+//  callers still use - `--build-scripts`, and anything that wants to wait.
+// ============================================================================
 
-    const Sources                  sources    = GatherSources();
-    const std::vector<std::string> allSources = sources.All();
+bool ScriptBuild::BeginBuild(Result& out) {
+    out = Result{};
 
+    const Sources   sources  = GatherSources();
     std::error_code ec;
-    const fs::path  buildDir = BuildDirectory();
-    fs::create_directories(buildDir, ec);
+    fs::create_directories(BuildDirectory(), ec);
 
     // ---- nothing to compile ----------------------------------------------
     if (sources.Empty()) {
@@ -574,18 +594,18 @@ ScriptBuild::Result ScriptBuild::BuildAndReload() {
         std::ofstream(SourceListFile(), std::ios::trunc);      // record: nothing built
         std::ofstream(ClassManifestFile(), std::ios::trunc);
 
-        result.rebuilt = true;
-        result.summary = "no scripts found in assets/ - nothing to build";
-        ENGINE_LOG_INFO(eng::Channels::kEditor, "{}", result.summary);
-        return result;
+        out.rebuilt = true;
+        out.summary = "no scripts found in assets/ - nothing to build";
+        ENGINE_LOG_INFO(eng::Channels::kEditor, "{}", out.summary);
+        return false;   // already finished; there is nothing to compile
     }
 
     if (!g_haveCompiler) {
-        result.ok      = false;
-        result.summary = "scripts changed, but there is no C++ compiler to build them";
-        ENGINE_LOG_ERROR(eng::Channels::kEditor, "{} ({})", result.summary,
+        out.ok      = false;
+        out.summary = "scripts changed, but there is no C++ compiler to build them";
+        ENGINE_LOG_ERROR(eng::Channels::kEditor, "{} ({})", out.summary,
                          "see the message at start-up for what to install");
-        return result;
+        return false;
     }
 
     // ---- unload BEFORE building ------------------------------------------
@@ -595,7 +615,25 @@ ScriptBuild::Result ScriptBuild::BuildAndReload() {
     // would simply fail. And every script object in the running scene was
     // created by code inside this library; destroying them first is the only
     // way they can be destroyed at all.
+    //
+    // ON THE MAIN THREAD, always. This is the line that cannot move to a
+    // worker: it runs destructors for objects the main thread is holding.
     eng::ScriptLibrary::Unload();
+    return true;
+}
+
+ScriptBuild::Result ScriptBuild::Compile() {
+    Result result;
+
+    // Re-gathered rather than passed in, so this function depends on nothing
+    // the main thread is still holding. Walking assets/ costs nothing next to
+    // running a compiler.
+    const Sources                  sources    = GatherSources();
+    const std::vector<std::string> allSources = sources.All();
+
+    std::error_code ec;
+    const fs::path  buildDir = BuildDirectory();
+    fs::create_directories(buildDir, ec);
 
     // ---- write the build script ------------------------------------------
     const fs::path       output    = OutputLibrary();
@@ -743,6 +781,21 @@ ScriptBuild::Result ScriptBuild::BuildAndReload() {
         stamp << CurrentBuildStamp();
     }
 
+    return result;
+}
+
+ScriptBuild::Result ScriptBuild::FinishBuild(Result compiled) {
+    // A compile that failed has nothing to load. The library is already
+    // unloaded, so every script shows as NOT FOUND in the Inspector - which
+    // is honest: the code that was running has been replaced by code that
+    // does not compile.
+    if (!compiled.ok) {
+        return compiled;
+    }
+
+    Result        result  = std::move(compiled);
+    const Sources sources = GatherSources();
+
     // ---- load the result --------------------------------------------------
     std::string loadError;
     if (!eng::ScriptLibrary::Load(eng::ScriptLibrary::DefaultVirtualPath(), loadError)) {
@@ -759,6 +812,101 @@ ScriptBuild::Result ScriptBuild::BuildAndReload() {
                      std::to_string(eng::ScriptLibrary::ScriptCount()) + " script(s) available";
     ENGINE_LOG_INFO(eng::Channels::kEditor, "{}", result.summary);
     return result;
+}
+
+ScriptBuild::Result ScriptBuild::BuildAndReload() {
+    Result result;
+    if (!BeginBuild(result)) {
+        return result;   // nothing to do, or no compiler
+    }
+    return FinishBuild(Compile());
+}
+
+// ===========================================================================
+//  THE ASYNCHRONOUS PATH
+// ===========================================================================
+namespace {
+
+// ONE POOL FOR THE WHOLE EDITOR, created the first time a build is asked for
+// and shut down when the program ends.
+//
+// A pool created per build would start a worker per core EVERY TIME, which
+// is the opposite of what a pool is for. A function-local static is created
+// once, on first use, with no start-up cost for an editor session that never
+// builds anything.
+fire::ThreadPool& BuildPool() {
+    static fire::ThreadPool pool{1};   // one worker: builds are serialised anyway
+    return pool;
+}
+
+// The build in flight, if any. A future rather than a raw thread so there is
+// something to wait on, and so an exception inside the compile surfaces here
+// rather than terminating the program.
+std::future<ScriptBuild::Result> g_pending;
+std::atomic<bool>                g_building{false};
+
+} // namespace
+
+bool ScriptBuild::IsBuilding() {
+    return g_building.load(std::memory_order_acquire);
+}
+
+bool ScriptBuild::BeginAsync() {
+    // THE GUARD. Everything else in this file is ordinary; this one line is
+    // what stops one edit becoming a pile of compiler processes. See the note
+    // on BeginAsync in the header for why the blocking version never needed
+    // it.
+    if (IsBuilding()) {
+        return false;
+    }
+
+    Result immediate;
+    if (!BeginBuild(immediate)) {
+        // Nothing to compile, or no compiler. There is no worker to wait for,
+        // so the answer is ready now - parked where TakeResult will find it
+        // so callers have one way of collecting a result rather than two.
+        g_building.store(true, std::memory_order_release);
+
+        std::promise<Result> done;
+        done.set_value(std::move(immediate));
+        g_pending = done.get_future();
+        return false;
+    }
+
+    g_building.store(true, std::memory_order_release);
+    g_pending = BuildPool().submit([] { return Compile(); });
+    return true;
+}
+
+bool ScriptBuild::TakeResult(Result& out) {
+    if (!g_pending.valid()) {
+        return false;
+    }
+
+    // POLLED, NOT WAITED ON. This is called once a frame from the main loop,
+    // and blocking here for even a moment is the lock-up this whole change
+    // exists to remove.
+    if (g_pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return false;
+    }
+
+    Result compiled = g_pending.get();   // also clears the future
+    g_building.store(false, std::memory_order_release);
+
+    // THE LOAD HAPPENS HERE, on whichever thread called TakeResult - which is
+    // the main one. It recreates and rebinds every script object in the live
+    // scene, so it cannot run on the worker. See BeginBuild.
+    out = FinishBuild(std::move(compiled));
+    return true;
+}
+
+void ScriptBuild::WaitForBuild() {
+    if (!g_pending.valid()) {
+        return;
+    }
+    Result ignored;
+    g_pending.wait();
+    TakeResult(ignored);
 }
 
 // ---------------------------------------------------------------------------

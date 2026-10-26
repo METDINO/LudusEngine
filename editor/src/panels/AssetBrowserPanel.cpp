@@ -143,8 +143,14 @@ void AssetBrowserPanel::DrawBreadcrumb() {
     ImGui::SameLine();
     ImGui::BeginDisabled(!ScriptBuild::HasCompiler());
     if (ImGui::SmallButton("Build Scripts")) {
-        const ScriptBuild::Result result = ScriptBuild::BuildAndReload();
-        std::snprintf(m_status, sizeof(m_status), "%s", result.summary.c_str());
+        // Started, not waited for - the editor keeps drawing while the
+        // compiler runs. EditorApp collects the result once it is ready and
+        // puts the summary in the menu bar. See ScriptBuild.h.
+        if (ScriptBuild::BeginAsync()) {
+            std::snprintf(m_status, sizeof(m_status), "building scripts...");
+        } else if (ScriptBuild::IsBuilding()) {
+            std::snprintf(m_status, sizeof(m_status), "already building");
+        }
         Refresh();
     }
     ImGui::EndDisabled();
@@ -353,7 +359,12 @@ bool AssetBrowserPanel::CreateScript(const std::string& name, std::string& outEr
     // moment is a script that appears not to work. Building it now means the
     // class exists by the time you have finished reading the file, and it
     // turns up in the Inspector's script list immediately.
+    // SYNCHRONOUS here, on purpose. The point of building after writing a
+    // new script is that the class exists by the time you have finished
+    // reading the file - so this one waits. It is also the only build the
+    // user did not start themselves, and a brand new file compiles fast.
     const ScriptBuild::Result build = ScriptBuild::BuildAndReload();
+
     if (!build.ok) {
         // Not a failure of CreateScript - the file was written and is fine.
         // The template compiles, so a failure here is almost always another

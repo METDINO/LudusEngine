@@ -13,11 +13,33 @@
 
 #include <engine/core/LogBuffer.h>
 
+#include <mutex>
+
 #include <algorithm>
 #include <set>
 
 namespace eng {
 namespace {
+
+// ============================================================================
+//  ONE MUTEX GUARDS EVERYTHING BELOW.
+//
+//  This buffer is written by whoever logs and read by the Console panel while
+//  it draws. That was fine while the whole editor ran on one thread, and
+//  stopped being fine the moment script compilation moved to a worker: the
+//  compiler's output is logged from that worker while the main thread is
+//  drawing the Console.
+//
+//  A ring buffer appended to while it is being copied produces torn records,
+//  and once the vector reallocates, a read of freed memory. Neither shows up
+//  as a bad message - they show up as the editor falling over somewhere
+//  unrelated, minutes later.
+//
+//  This is also what makes it legal for a background task to log at all.
+//  Before it the rule was "a callback must not log", which is the kind of
+//  rule somebody eventually breaks by accident.
+// ============================================================================
+std::mutex g_mutex;
 
 std::vector<LogRecord> g_ring;                                   // the storage
 std::size_t            g_capacity = LogBuffer::kDefaultCapacity;  // how many fit
@@ -34,6 +56,8 @@ std::set<std::string> g_channels;
 } // namespace
 
 void LogBuffer::SetCapacity(std::size_t capacity) {
+    const std::lock_guard<std::mutex> lock{g_mutex};
+
     if (capacity == 0) {
         capacity = 1;   // a zero-length ring would divide by zero below
     }
@@ -44,9 +68,14 @@ void LogBuffer::SetCapacity(std::size_t capacity) {
     g_size = 0;
 }
 
-std::size_t LogBuffer::Capacity() { return g_capacity; }
+std::size_t LogBuffer::Capacity() {
+    const std::lock_guard<std::mutex> lock{g_mutex};
+    return g_capacity;
+}
 
 void LogBuffer::Append(const LogRecord& record) {
+    const std::lock_guard<std::mutex> lock{g_mutex};
+
     // The storage is allocated the first time something is logged rather than
     // at startup, so a program that never logs never pays for it.
     if (g_ring.size() < g_capacity) {
@@ -68,6 +97,8 @@ void LogBuffer::Append(const LogRecord& record) {
 }
 
 void LogBuffer::Snapshot(std::vector<LogRecord>& out) {
+    const std::lock_guard<std::mutex> lock{g_mutex};
+
     out.clear();
     out.reserve(g_size);
 
@@ -82,13 +113,18 @@ void LogBuffer::Snapshot(std::vector<LogRecord>& out) {
 }
 
 void LogBuffer::Channels(std::vector<std::string>& out) {
+    const std::lock_guard<std::mutex> lock{g_mutex};
     out.assign(g_channels.begin(), g_channels.end());
 }
 
-std::size_t        LogBuffer::Count()        { return g_size; }
+std::size_t LogBuffer::Count() {
+    const std::lock_guard<std::mutex> lock{g_mutex};
+    return g_size;
+}
 unsigned long long LogBuffer::TotalWritten() { return g_total; }
 
 void LogBuffer::Clear() {
+    const std::lock_guard<std::mutex> lock{g_mutex};
     g_head = 0;
     g_size = 0;
     // The channel names are deliberately kept. Pressing "Clear" in the Console

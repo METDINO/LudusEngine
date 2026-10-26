@@ -46,6 +46,7 @@ set(ENGINE_SOURCES
 
     src/scene/BuildScenes.cpp         # which scenes ship, and in what order
     src/scene/Component.cpp           # components, the factory, sprites
+    src/scene/CameraComponent.cpp     # the game camera, as an entity
     src/scene/DeferredOps.cpp         # safe create and destroy
     src/scene/Entity.cpp
     src/scene/Messaging.cpp           # entities talking to each other

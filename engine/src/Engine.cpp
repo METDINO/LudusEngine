@@ -129,10 +129,18 @@ bool Engine::SceneSubsystem::Init(const BootConfig&) {
     SpinSystem::RegisterComponentTypes();
     ScriptSystem::RegisterComponentTypes();
 
+    // The camera is a component like any other - see CameraComponent.h.
+    ComponentFactory::Register(CameraComponent::kTypeName,
+                               []() -> std::unique_ptr<Component> {
+                                   return std::make_unique<CameraComponent>();
+                               });
+
     engine.m_spinSystem   = std::make_unique<SpinSystem>();
     engine.m_scriptSystem = std::make_unique<ScriptSystem>();
+    engine.m_cameraSystem = std::make_unique<CameraSystem>();
     SystemScheduler::Register(engine.m_spinSystem.get());
     SystemScheduler::Register(engine.m_scriptSystem.get());
+    SystemScheduler::Register(engine.m_cameraSystem.get());
 
     engine.m_scene = std::make_unique<Scene>();
     Scene::SetActive(engine.m_scene.get());
@@ -153,9 +161,14 @@ void Engine::SceneSubsystem::Shutdown() {
         SystemScheduler::Unregister(engine.m_scriptSystem.get());
         engine.m_scriptSystem.reset();
     }
+    if (engine.m_cameraSystem != nullptr) {
+        SystemScheduler::Unregister(engine.m_cameraSystem.get());
+        engine.m_cameraSystem.reset();
+    }
     SpinSystem::Clear();
     ScriptSystem::Clear();
     SpriteRenderSystem::Clear();
+    CameraSystem::Clear();
     Scene::SetActive(nullptr);
     engine.m_scene.reset();
 }
@@ -507,6 +520,18 @@ void Engine::Simulate() {
     if (m_scene != nullptr) {
         DeferredOps::Apply(*m_scene);
     }
+
+    // AND THE CAMERA, for exactly the same reason as the queue above.
+    //
+    // CameraSystem runs at stage 700 inside the step loop, which is right
+    // while the game is playing. But a PAUSED clock runs no steps - which is
+    // what the editor sits in while you are editing - so without this line,
+    // dragging the camera entity around in the Scene view would not move the
+    // Game view until Play was pressed.
+    //
+    // Applying it twice in a playing frame costs a position copy and is
+    // harmless. See CameraComponent.h.
+    CameraSystem::Apply();
 }
 
 void Engine::RenderWorld(Camera& camera, bool includeGizmos) {

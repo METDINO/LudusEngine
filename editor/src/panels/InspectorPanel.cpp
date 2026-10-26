@@ -250,6 +250,67 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
 // ---------------------------------------------------------------------------
 //  SpinComponent
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  CameraComponent
+// ---------------------------------------------------------------------------
+void DrawCamera(eng::CameraComponent& camera) {
+    // WHICH CAMERA IS ACTUALLY LIVE, said first and plainly. With more than
+    // one camera in a scene, "why is the Game view not where I put this?" is
+    // the question this panel exists to answer.
+    if (camera.IsActive()) {
+        ImGui::TextColored(ImVec4(0.55f, 0.90f, 0.60f, 1.0f),
+                           "This camera is driving the Game view.");
+    } else if (!camera.Enabled()) {
+        ImGui::TextColored(ImVec4(0.75f, 0.75f, 0.78f, 1.0f),
+                           "Disabled - it is ignored entirely.");
+    } else if (const eng::CameraComponent* active = eng::CameraSystem::Active()) {
+        const eng::Entity* owner = active->Owner();
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                           "NOT in use - '%s' has a higher priority (%d vs %d).",
+                           owner != nullptr ? owner->Name().c_str() : "another camera",
+                           active->Priority(), camera.Priority());
+    }
+
+    float zoom = camera.Zoom();
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::DragFloat("Zoom", &zoom, 0.01f, 0.01f, 50.0f, "%.2fx")) {
+        camera.SetZoom(zoom);
+        EditorState::Get().dirty = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Bigger is closer in. This is the game's zoom - the Scene "
+                          "view has its own and is not affected.");
+    }
+
+    int priority = camera.Priority();
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::DragInt("Priority", &priority, 0.2f)) {
+        camera.SetPriority(priority);
+        EditorState::Get().dirty = true;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("With several cameras in a scene, the highest priority is "
+                          "the one used. Ties go to whichever was found first.");
+    }
+
+    bool enabled = camera.Enabled();
+    if (ImGui::Checkbox("Enabled", &enabled)) {
+        camera.SetEnabled(enabled);
+        EditorState::Get().dirty = true;
+    }
+
+    ImGui::Separator();
+
+    // THE POSITION IS THE TRANSFORM'S, and saying so stops somebody looking
+    // for a position field that deliberately does not exist.
+    ImGui::TextDisabled("Its position is the Transform above - there is no separate");
+    ImGui::TextDisabled("camera position. Parent it to something to make it follow.");
+
+    if (eng::CameraSystem::Count() > 1) {
+        ImGui::TextDisabled("%zu cameras in this scene.", eng::CameraSystem::Count());
+    }
+}
+
 void DrawSpin(eng::SpinComponent& spin) {
     // Edited in degrees, stored in radians - same reason as the transform's
     // rotation field above.
@@ -399,6 +460,8 @@ void InspectorPanel::Draw() {
                 DrawSpin(static_cast<eng::SpinComponent&>(component));
             } else if (type == eng::ScriptComponent::kTypeName) {
                 DrawScript(static_cast<eng::ScriptComponent&>(component));
+            } else if (type == eng::CameraComponent::kTypeName) {
+                DrawCamera(static_cast<eng::CameraComponent&>(component));
             } else {
                 // Not an error. Somebody may write their own component type,
                 // and the Inspector should say so rather than pretend it is

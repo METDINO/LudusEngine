@@ -9,6 +9,7 @@
 #include "EditorApp.h"
 
 #include "EditorGui.h"
+#include "ObjectMenu.h"
 #include "EditorSession.h"
 #include "GameExport.h"
 #include "ScriptBuild.h"
@@ -292,6 +293,18 @@ void EditorApp::DrawMenuBar() {
         ImGui::EndMenu();
     }
 
+    // ---- Objects -----------------------------------------------------------
+    //
+    // The same items the Hierarchy's right-click menu offers, drawn from the
+    // one list so the two cannot drift apart. See ObjectMenu.h.
+    if (ImGui::BeginMenu("Objects")) {
+        if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
+            EditorState::Get().selected = created;
+            EditorState::Get().dirty    = true;
+        }
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("View")) {
         // The loop that means this menu never has to be edited again. Every
         // panel ever added appears here for free.
@@ -377,7 +390,6 @@ void EditorApp::FocusGameViewIfRequested() {
     // case where its own Draw does not run. See GamePanel.h.
     ImGui::SetWindowFocus(m_gamePanel->Title());
 }
-
 void EditorApp::RebuildScriptsIfChanged() {
     if (!ScriptBuild::NeedsRebuild()) {
         return;   // the usual case, and it costs only a few timestamp checks
@@ -397,12 +409,15 @@ void EditorApp::RebuildScriptsIfChanged() {
         engine.ExitPlayMode();
     }
 
-    const ScriptBuild::Result result = ScriptBuild::BuildAndReload();
-    std::snprintf(m_status, sizeof(m_status), "%s", result.summary.c_str());
-
-    // A failed build is worth putting in front of somebody rather than leaving
-    // in the Console - the scripts that were running have just stopped.
-    m_scriptBuildFailed = !result.ok;
+    // STARTED, not waited for. The editor keeps drawing while the compiler
+    // runs; the answer is collected in Run() once it is ready.
+    //
+    // BeginAsync refuses when one is already in flight, which is what stops
+    // a rebuild being started again on every frame that asks - see
+    // ScriptBuild.h.
+    if (ScriptBuild::BeginAsync()) {
+        std::snprintf(m_status, sizeof(m_status), "building scripts...");
+    }
 
     // Push the log to disk now rather than letting it sit in the buffer.
     //
@@ -420,6 +435,24 @@ void EditorApp::Run(int frameLimit) {
     while (engine.BeginFrame()) {
         if (frameLimit > 0 && frames++ >= frameLimit) {
             break;
+        }
+
+        // ==================================================================
+        //  COLLECT A FINISHED BUILD, once a frame.
+        //
+        //  This is where the library is actually loaded and every script
+        //  rebound - on the main thread, between frames, with nothing
+        //  half way through walking the script list. The worker only ever
+        //  ran the compiler. See ScriptBuild.h.
+        // ==================================================================
+        if (ScriptBuild::Result built; ScriptBuild::TakeResult(built)) {
+            std::snprintf(m_status, sizeof(m_status), "%s", built.summary.c_str());
+            m_scriptBuildFailed = !built.ok;
+
+            // Flushed HERE rather than when the build started, because the
+            // interesting case - a script that compiled and then brought the
+            // editor down - produces its output during the build, not before.
+            eng::Log::Flush();
         }
 
         // The user alt-tabbed back to the editor. That is the moment to check
@@ -555,6 +588,15 @@ void EditorApp::Run(int frameLimit) {
 }
 
 void EditorApp::Shutdown() {
+    // ANY BUILD STILL RUNNING IS WAITED FOR, FIRST.
+    //
+    // A compiler writing into .build/ while the engine tears itself down
+    // leaves a half-written library behind, and the worker would be touching
+    // the log after the log had been shut down. Waiting is the one place in
+    // this whole feature where blocking is the right answer: the editor is
+    // closing, so there is nothing left to keep responsive.
+    ScriptBuild::WaitForBuild();
+
     // THE SESSION IS SAVED FIRST, while there is still something to read.
     //
     // It needs the Scene view's camera, which lives in a panel, and the open

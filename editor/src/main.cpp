@@ -105,7 +105,6 @@ int BuildGameAndExit(const char* destination) {
 
     return result.ok ? 0 : 1;
 }
-
 // --build-scripts: compile the project's scripts and exit, without opening a
 // window.
 //
@@ -136,6 +135,10 @@ int BuildScriptsAndExit() {
     log.Init(config);
 
     editor::ScriptBuild::Init();
+
+    // SYNCHRONOUS, deliberately. This mode exists to compile and exit, so
+    // there is no window to keep responsive and nothing to do while waiting -
+    // and an automated build needs the exit code to mean the build finished.
     const editor::ScriptBuild::Result result = editor::ScriptBuild::BuildAndReload();
 
     fileSystem.Shutdown();

@@ -87,6 +87,46 @@ public:
     // edited carries on working with nothing reattached.
     static Result BuildAndReload();
 
+    // ========================================================================
+    //  BUILDING WITHOUT LOCKING THE EDITOR UP.
+    //
+    //  BuildAndReload blocks until the compiler finishes, which is seconds of
+    //  frozen window. These three run it on a worker instead:
+    //
+    //      if (ScriptBuild::BeginAsync()) { ... }        // starts one
+    //      if (ScriptBuild::IsBuilding())  { ... }       // still going
+    //      Result r;
+    //      if (ScriptBuild::TakeResult(r)) { ... }       // finished; collect
+    //
+    //  ------------------------------------------------------------------
+    //  ONLY ONE BUILD RUNS AT A TIME, and that guard is the whole point.
+    //
+    //  NeedsRebuild() answers from the FILES, and the files do not change
+    //  until a build finishes. So anything that asks "does this need
+    //  rebuilding?" on a timer gets "yes" every single time while a build is
+    //  already running - and starting a thread for each of those answers is
+    //  how one edit turns into dozens of compiler processes fighting over the
+    //  same output file.
+    //
+    //  Blocking while a build runs also used to hide this: no frames were
+    //  drawn during a build, so nothing could ask again. Making it
+    //  asynchronous removed that accidental protection, which is why the
+    //  guard has to be explicit now.
+    //
+    //  BeginAsync returns false when one is already in flight, or when there
+    //  was nothing to do - in which case the result is ready immediately.
+    //  ------------------------------------------------------------------
+    //
+    //  TakeResult MUST be called from the main thread. It performs the load
+    //  and the rebinding, which touch the live scene.
+    static bool BeginAsync();
+    static bool IsBuilding();
+    static bool TakeResult(Result& out);
+
+    // Waits for any in-flight build and collects it. Called on the way down,
+    // so the editor never exits with a compiler still writing into .build/.
+    static void WaitForBuild();
+
     // What the last build printed. Kept so a panel can show it after the fact.
     static const std::string& LastOutput();
 
@@ -126,6 +166,16 @@ public:
     // reports the count, and because it is the honest answer to "which files
     // does the editor think are scripts?".
     static Sources GatherSources();
+
+    // The three phases of a build. See the long note above BeginBuild in the
+    // .cpp for which of them may run off the main thread - only Compile may.
+    //
+    // Public because the asynchronous path drives them from two threads, and
+    // because spelling the phases out is the clearest statement of which part
+    // of a build is allowed to touch the live scene.
+    static bool   BeginBuild(Result& out);
+    static Result Compile();
+    static Result FinishBuild(Result compiled);
 
 private:
     // After a successful build: compares the classes each file registers

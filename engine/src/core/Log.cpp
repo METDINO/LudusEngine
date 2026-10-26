@@ -14,6 +14,8 @@
 
 #include <engine/core/Config.h>
 #include <engine/core/Log.h>
+
+#include <mutex>
 #include <engine/core/LogBuffer.h>
 #include <engine/fs/FileSystem.h>
 
@@ -31,6 +33,10 @@ namespace {
 // in Init and kept open for the whole run: opening and closing a file for every
 // log line is slow enough to change the timing of whatever you were trying to
 // observe.
+// Serialises Log::Write. See the note in Write about why it covers all three
+// destinations rather than only the file.
+std::mutex g_writeMutex;
+
 std::ofstream g_file;
 
 LogLevel g_threshold   = LogLevel::Info;
@@ -188,6 +194,17 @@ LogLevel Log::GetThreshold()               { return g_threshold; }
 bool     Log::ShouldLog(LogLevel level)    { return level >= g_threshold; }
 
 void Log::Write(std::string_view channel, LogLevel level, std::string_view message) {
+    // ONE LOCK FOR THE WHOLE WRITE, held across all three destinations.
+    //
+    // Not just to protect the file handle: two threads logging at once would
+    // also interleave their characters on the terminal, producing a single
+    // unreadable line made out of two messages. Holding it across all three
+    // keeps one message together everywhere.
+    //
+    // Separate from LogBuffer's own lock, which guards the ring on its own
+    // behalf. This one is never held while anything can re-enter Write.
+    const std::lock_guard<std::mutex> lock{g_writeMutex};
+
     // Checked again here even though the macro already checked, because Write
     // is public and something may call it directly.
     if (!ShouldLog(level)) {
