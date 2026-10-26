@@ -140,10 +140,21 @@ void MessageBus::Shutdown() {
     Clear();
 }
 
-void MessageBus::Clear() {
-    g_subscriptions.clear();
+void MessageBus::ClearQueue() {
     g_queue.clear();
     g_dispatching = false;
+}
+
+void MessageBus::Clear() {
+    // EVERYTHING, SUBSCRIBERS INCLUDED. Only correct on the way down, when
+    // the whole bus is being taken apart.
+    //
+    // Stopping play mode must use ClearQueue instead. It used to call this,
+    // which threw away every subscription - so collision handlers worked on
+    // the first play session and silently stopped on the second, with
+    // nothing reported anywhere. See Engine::ExitPlayMode.
+    g_subscriptions.clear();
+    ClearQueue();
 }
 
 

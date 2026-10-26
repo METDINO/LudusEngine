@@ -11,6 +11,7 @@
 #include <engine/scene/ScriptComponent.h>
 
 #include <algorithm>
+#include <string_view>
 #include <map>
 #include <vector>
 
@@ -457,8 +458,33 @@ void ScriptSystem::SubscribeToCollisions() {
         if (entity == nullptr) {
             return;   // destroyed between the collision and the delivery
         }
-        if (auto* script = entity->Find<ScriptComponent>(); script != nullptr) {
-            script->DispatchCollision(message.type, message.other);
+        // EVERY SCRIPT ON THE ENTITY, not just the first one.
+        //
+        // This used to be Find<ScriptComponent>(), which returns the FIRST
+        // match - so an entity carrying two scripts delivered collisions to
+        // one of them and silently dropped them for the other. Which one
+        // depended on the order they happened to be listed in the scene file,
+        // and nothing reported the difference: OnStart and OnUpdate ran for
+        // both, so the script looked attached and working right up until it
+        // needed to know it had been touched.
+        //
+        // WALKED BY INDEX with the size re-read each time, exactly as
+        // ScriptSystem::Update does, and for the same reason: a script
+        // handling a collision is allowed to attach another component.
+        for (std::size_t i = 0; i < entity->ComponentCount(); ++i) {
+            Component* component = entity->ComponentAt(i);
+            if (component == nullptr) {
+                continue;
+            }
+            // Compared as TEXT, not as pointers. Both sides are string
+            // literals, but the two literals live in different binaries -
+            // engine.dll and userContent.dll - and nothing promises the
+            // linker folded them into one address.
+            if (std::string_view(component->TypeName()) != ScriptComponent::kTypeName) {
+                continue;
+            }
+            static_cast<ScriptComponent*>(component)->DispatchCollision(message.type,
+                                                                        message.other);
         }
     };
 

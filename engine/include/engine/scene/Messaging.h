@@ -108,6 +108,12 @@ public:
     // Delivers everything queued. Called once per simulation step, at stage 500.
     static void Dispatch();
 
+    // Throws away messages that are queued but NOT yet delivered, and leaves
+    // the subscribers alone. This is what stopping play mode wants.
+    static void ClearQueue();
+
+    // The queue AND every subscription. Only correct when the whole bus is
+    // being taken apart - see the note in Messaging.cpp.
     static void Clear();
 };
 

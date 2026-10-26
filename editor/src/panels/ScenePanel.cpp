@@ -487,7 +487,34 @@ void ScenePanel::RenderView() {
     // The editing helpers are queued HERE rather than inside the engine, so
     // they appear in the Scene view and never in the Game view. That is the
     // entire difference between the two panels.
-    eng::Gizmos::Grid(100.0f, eng::Color{42, 42, 52, 255});
+    // ======================================================================
+    //  THE AREA THE CAMERA CAN SEE, worked out here because this panel is
+    //  the only thing that knows both the camera and the size of the picture
+    //  it is drawing into. Without it the grid was a fixed box around the
+    //  world origin and simply stopped once you panned past its edge.
+    //
+    //  The two opposite CORNERS of the view are converted from screen pixels
+    //  back into world units. Screen y runs downward and world y runs up, so
+    //  the top-left of the screen is the HIGHEST point in the world - which
+    //  is why the two results are sorted into a min and a max rather than
+    //  used in the order they come out.
+    //
+    //  Padded by one step so the lines reach past the edges instead of
+    //  stopping a few pixels short of them.
+    // ======================================================================
+    constexpr float kGridSpacing = 100.0f;
+
+    const eng::Vec2 corner0 = m_camera.ScreenToWorld(eng::Vec2{0.0f, 0.0f});
+    const eng::Vec2 corner1 =
+        m_camera.ScreenToWorld(eng::Vec2{m_imageSize.x, m_imageSize.y});
+
+    const eng::AABB view = eng::AABB::FromMinMax(
+        eng::Vec2{std::min(corner0.x, corner1.x) - kGridSpacing,
+                  std::min(corner0.y, corner1.y) - kGridSpacing},
+        eng::Vec2{std::max(corner0.x, corner1.x) + kGridSpacing,
+                  std::max(corner0.y, corner1.y) + kGridSpacing});
+
+    eng::Gizmos::Grid(view, kGridSpacing, eng::Color{42, 42, 52, 255});
     eng::Gizmos::OriginAxes(120.0f);
 
     eng::Engine::Get().RenderWorld(m_camera, /*includeGizmos=*/true);

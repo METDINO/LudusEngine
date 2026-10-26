@@ -121,12 +121,21 @@ bool SpriteComponent::Deserialize(const Json& node, std::string& outError) {
         outError = "SpriteComponent needs a \"texture\" field naming an image file";
         return false;
     }
+    // ========================================================================
+    //  A MISSING TEXTURE IS AN ERROR; AN EMPTY ONE IS NOT.
+    //
+    //  No "texture" key at all means a hand-written file forgot it, which is
+    //  worth reporting - that is the check above. But an EMPTY one is
+    //  completely ordinary: adding a SpriteComponent in the editor gives you
+    //  one with no image until you drop a file onto it, and saving in that
+    //  state writes "".
+    //
+    //  This used to return false the moment the path was empty - and because
+    //  it returned BEFORE reading anything else, the tint, the layer and the
+    //  size were all silently thrown away. Adding a sprite, setting its draw
+    //  order, saving and reloading lost the draw order.
+    // ========================================================================
     m_texturePath = ReadString(node, "texture", "", kTypeName);
-    if (m_texturePath.empty()) {
-        outError = "SpriteComponent's \"texture\" must be text, e.g. "
-                   "\"textures/player.png\"";
-        return false;
-    }
 
     // Tint is four numbers from 0 to 255. Written that way rather than as
     // 0.0-1.0 because it matches what an image editor's colour picker shows.

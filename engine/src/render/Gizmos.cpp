@@ -167,16 +167,64 @@ void Gizmos::TransformedBox(const Mat3& worldMatrix, Vec2 halfExtents, Color col
     }
 }
 
-void Gizmos::Grid(float spacing, Color color, int halfLines) {
-    if (spacing <= 0.0f) {
+float Gizmos::GridStepFor(const AABB& worldArea, float spacing) {
+    if (spacing <= 0.0f || !worldArea.IsValid()) {
+        return 0.0f;
+    }
+
+    const Vec2 size = worldArea.Size();
+
+    // ========================================================================
+    //  THE SPACING GROWS WHEN THERE WOULD BE TOO MANY LINES.
+    //
+    //  This grid covers whatever area it is handed, which means zooming out
+    //  far enough would otherwise ask for tens of thousands of lines - every
+    //  one of them queued, transformed and drawn, on every frame. The editor
+    //  would appear to hang, and the cause would be invisible because nothing
+    //  would be wrong with the picture.
+    //
+    //  So the step DOUBLES until the count fits. Doubling rather than any
+    //  other factor keeps every coarser line sitting exactly on top of a
+    //  finer one, so the lines do not appear to shuffle sideways as the zoom
+    //  crosses a threshold.
+    //
+    //  Bounded as well as conditional: the condition alone would spin forever
+    //  on an infinite or not-a-number area.
+    // ========================================================================
+    float step = spacing;
+    for (int guard = 0; guard < 64; ++guard) {
+        if ((size.x / step) + (size.y / step) <= static_cast<float>(kGridMaxLines)) {
+            break;
+        }
+        step *= 2.0f;
+    }
+    return step;
+}
+
+void Gizmos::Grid(const AABB& worldArea, float spacing, Color color) {
+    const float step = GridStepFor(worldArea, spacing);
+    if (step <= 0.0f) {
         return;
     }
-    const float extent = spacing * static_cast<float>(halfLines);
-    for (int i = -halfLines; i <= halfLines; ++i) {
-        const float offset = spacing * static_cast<float>(i);
-        Line(Vec2{offset, -extent}, Vec2{offset, extent}, color, 0.0f,
+
+    // ========================================================================
+    //  THE LINES ARE PLACED ON MULTIPLES OF THE STEP IN WORLD SPACE.
+    //
+    //  This is what makes the grid belong to the WORLD rather than to the
+    //  camera. Starting at the edge of the visible area instead would make
+    //  the lines slide along with every pan - a grid that moves with you
+    //  tells you nothing about where anything is, which is the entire point
+    //  of having one.
+    // ========================================================================
+    const float startX = std::floor(worldArea.min.x / step) * step;
+    const float startY = std::floor(worldArea.min.y / step) * step;
+
+    for (float x = startX; x <= worldArea.max.x; x += step) {
+        Line(Vec2{x, worldArea.min.y}, Vec2{x, worldArea.max.y}, color, 0.0f,
              GizmoSpace::World, GizmoCategory::Grid);
-        Line(Vec2{-extent, offset}, Vec2{extent, offset}, color, 0.0f,
+    }
+    for (float y = startY; y <= worldArea.max.y; y += step) {
+        Line(Vec2{worldArea.min.x, y}, Vec2{worldArea.max.x, y}, color, 0.0f,
              GizmoSpace::World, GizmoCategory::Grid);
     }
 }

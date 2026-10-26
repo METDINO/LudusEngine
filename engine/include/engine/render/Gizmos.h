@@ -114,7 +114,32 @@ public:
     // The background grid and the red/green arrows at the world origin. Twenty
     // minutes of work that gets used constantly, because "where IS (0,0)?" is
     // the first question every drawing problem asks.
-    static void Grid(float spacing, Color color, int halfLines = 20);
+    // ========================================================================
+    //  A grid covering a world-space AREA.
+    //
+    //  This used to take a line count and draw a fixed box around the world
+    //  ORIGIN, which meant the grid simply stopped once you panned past its
+    //  edge - the camera would sail off into empty space with nothing to
+    //  judge position against.
+    //
+    //  Taking an area instead puts the caller in charge of "what can be
+    //  seen", which is the only thing that knows: the Scene view works it out
+    //  from its camera and viewport, so the grid now covers the view however
+    //  far it moves or zooms. See ScenePanel::RenderView.
+    //
+    //  The spacing is COARSENED automatically when the area would need too
+    //  many lines to draw sensibly - the reason is in the implementation and
+    //  it is worth reading.
+    // ========================================================================
+    static void Grid(const AABB& worldArea, float spacing, Color color);
+
+    // The most lines Grid will draw across both axes before it starts
+    // doubling the spacing instead.
+    static constexpr int kGridMaxLines = 400;
+
+    // The spacing Grid will ACTUALLY use for this area. Split out so the one
+    // piece of arithmetic worth getting wrong can be tested on its own.
+    static float GridStepFor(const AABB& worldArea, float spacing);
     static void OriginAxes(float length = 100.0f);
 
     // Draws everything currently queued, seen through `camera`. Called after

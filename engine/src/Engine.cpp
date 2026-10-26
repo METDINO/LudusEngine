@@ -416,7 +416,11 @@ void Engine::ExitPlayMode() {
     // applied to the restored scene - a destroy queued on the last frame of
     // play would otherwise delete an entity in the freshly restored one.
     DeferredOps::Clear();
-    MessageBus::Clear();
+
+    // ClearQueue, NOT Clear. Clear drops every SUBSCRIPTION as well, which
+    // meant collision handlers worked on the first play session and silently
+    // stopped on the second - with nothing reported anywhere. See Messaging.h.
+    MessageBus::ClearQueue();
 
     if (m_scene != nullptr && !m_playModeSnapshot.empty()) {
         std::string error;

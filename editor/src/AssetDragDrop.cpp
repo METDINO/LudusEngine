@@ -123,7 +123,37 @@ bool ApplyAssetToEntity(eng::EntityId target, std::string_view virtualPath,
         case AssetKind::Script: {
             const std::string scriptName = ScriptNameFromPath(virtualPath);
 
-            auto* script = entity->Find<eng::ScriptComponent>();
+            // ONE ENTITY, SEVERAL SCRIPTS.
+            //
+            // This used to be Find<eng::ScriptComponent>(), which returns the
+            // first one - so dropping a second script onto an entity that
+            // already had one OVERWROTE it. The old script vanished, nothing
+            // said so, and the only clue was that a behaviour you set up
+            // earlier had quietly stopped happening.
+            //
+            // Three cases, in order:
+            //   - already running this script  -> say so, change nothing
+            //   - an empty slot going spare    -> fill it
+            //   - otherwise                    -> add another component
+            eng::ScriptComponent* script = nullptr;
+            for (std::size_t i = 0; i < entity->ComponentCount(); ++i) {
+                auto* candidate = dynamic_cast<eng::ScriptComponent*>(entity->ComponentAt(i));
+                if (candidate == nullptr) {
+                    continue;
+                }
+                if (candidate->ScriptName() == scriptName) {
+                    // Refused rather than duplicated. Running one script twice
+                    // on one object does its work twice over - and a dropped
+                    // file landing on something that already has it is far
+                    // more likely to be a slip than a request.
+                    outMessage = entity->Name() + " already runs " + scriptName;
+                    return false;
+                }
+                if (script == nullptr && candidate->ScriptName().empty()) {
+                    script = candidate;
+                }
+            }
+
             if (script == nullptr) {
                 script = static_cast<eng::ScriptComponent*>(
                     entity->AddComponent(eng::ScriptComponent::kTypeName));
