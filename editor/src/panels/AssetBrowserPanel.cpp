@@ -7,16 +7,20 @@
 
 #include "AssetDragDrop.h"
 #include "EditorApp.h"
+#include "ShellOpen.h"
 #include "ScriptBuild.h"
 #include "ScriptTemplate.h"
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <cstdio>
 
 namespace editor {
 namespace {
+
+namespace fs = std::filesystem;
 
 // ONE root: assets/. Scenes, images and scripts all live in it, in whatever
 // folder structure suits the game.
@@ -269,6 +273,24 @@ void AssetBrowserPanel::DrawEntry(const eng::FileSystem::DirEntry& entry, int in
         ImGui::EndTooltip();
     }
 
+    // A SINGLE CLICK SELECTS, which is what gives the Delete key something to
+    // act on. Taken on mouse-DOWN rather than release, so a click that turns
+    // into a drag still selects what it started from.
+    if (iconHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        m_selectedPath = entry.virtualPath;
+    }
+
+    // The selected tile gets a border. A selection you cannot see is worse
+    // than none at all, because the Delete key would then act on something
+    // invisible.
+    if (m_selectedPath == entry.virtualPath) {
+        ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(),
+                                            ImGui::GetItemRectMax(),
+                                            IM_COL32(120, 190, 250, 255), 3.0f, 0, 2.0f);
+    }
+
+    DrawEntryContextMenu(entry);
+
     if (iconClicked) {
         if (entry.isDirectory) {
             Navigate(entry.virtualPath);
@@ -277,10 +299,263 @@ void AssetBrowserPanel::DrawEntry(const eng::FileSystem::DirEntry& entry, int in
             // entity, and other panels are still using them this frame. See
             // EditorState::requestedScene.
             EditorState::Get().requestedScene = entry.virtualPath;
+        } else {
+            // EVERYTHING ELSE OPENS IN WHATEVER THE SYSTEM USES FOR IT - a
+            // .cpp in your C++ editor, a .png in your image viewer. That is
+            // what a double-click means everywhere else, and a panel where
+            // it works on folders and scenes and does nothing at all on a
+            // script reads as broken rather than as a deliberate limit.
+            OpenInSystemEditor(entry.virtualPath);
         }
     }
 
     ImGui::PopID();
+}
+
+void AssetBrowserPanel::DrawEntryContextMenu(const eng::FileSystem::DirEntry& entry) {
+    // BeginPopupContextItem opens on a right-click of the PREVIOUS item, so
+    // this has to come straight after the tile's group.
+    if (!ImGui::BeginPopupContextItem("asset-actions")) {
+        return;
+    }
+
+    // Right-clicking selects first. Without this the menu would act on
+    // whatever was selected BEFORE, so right-clicking one file and choosing
+    // Delete would delete a different one - about as bad as a context menu
+    // can get.
+    m_selectedPath = entry.virtualPath;
+
+    ImGui::TextDisabled("%s", entry.name.c_str());
+    ImGui::Separator();
+
+    if (entry.isDirectory) {
+        if (ImGui::MenuItem("Open Folder")) {
+            Navigate(entry.virtualPath);
+        }
+    } else if (ClassifyAsset(entry.virtualPath) == AssetKind::Scene) {
+        // A scene opens IN THE EDITOR, because that is obviously what you
+        // want - the system would hand it to a text editor.
+        if (ImGui::MenuItem("Open Scene")) {
+            EditorState::Get().requestedScene = entry.virtualPath;
+        }
+        if (ImGui::MenuItem("Open File")) {
+            OpenInSystemEditor(entry.virtualPath);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Opens the scene's JSON in a text editor, if this "
+                              "machine has one set up for .oscene files.");
+        }
+    } else {
+        if (ImGui::MenuItem("Open File")) {
+            OpenInSystemEditor(entry.virtualPath);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Opens it in whatever this machine uses for that kind "
+                              "of file - the same as double-clicking it.");
+        }
+    }
+
+    if (ImGui::MenuItem("View in File Explorer")) {
+        RevealAsset(entry.virtualPath);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Always works, even for file types nothing is set up to "
+                          "open.");
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::MenuItem("Rename...", "F2")) {
+        RequestRename(entry);
+    }
+    if (ImGui::MenuItem("Delete...", "Del")) {
+        RequestDelete(entry);
+    }
+
+    ImGui::EndPopup();
+}
+
+void AssetBrowserPanel::OpenInSystemEditor(const std::string& virtualPath) {
+    std::string error;
+    if (OpenExternally(virtualPath, error)) {
+        m_statusIsError = false;
+        std::snprintf(m_status, sizeof(m_status), "opened %s", virtualPath.c_str());
+        return;
+    }
+
+    // REPORTED TWICE, AND AT ERROR RATHER THAN WARNING.
+    //
+    // This is the whole fix for "double-clicking a file does nothing": the
+    // project's log threshold throws warnings away, so a warning here would
+    // reach neither the Console nor the log file. See ShellOpen.h.
+    m_statusIsError = true;
+    std::snprintf(m_status, sizeof(m_status), "%s", error.c_str());
+    ENGINE_LOG_ERROR(eng::Channels::kEditor, "could not open '{}': {}", virtualPath,
+                     error);
+}
+
+void AssetBrowserPanel::RevealAsset(const std::string& virtualPath) {
+    std::string error;
+    if (RevealInFolder(virtualPath, error)) {
+        m_statusIsError = false;
+        std::snprintf(m_status, sizeof(m_status), "showed %s in the file explorer",
+                      virtualPath.c_str());
+        return;
+    }
+    m_statusIsError = true;
+    std::snprintf(m_status, sizeof(m_status), "%s", error.c_str());
+    ENGINE_LOG_ERROR(eng::Channels::kEditor, "could not show '{}': {}", virtualPath,
+                     error);
+}
+
+void AssetBrowserPanel::RequestRename(const eng::FileSystem::DirEntry& entry) {
+    m_renamePath      = entry.virtualPath;
+    m_renameOriginal  = entry.name;
+    m_openRenamePopup = true;
+    std::snprintf(m_renameBuffer, sizeof(m_renameBuffer), "%s", entry.name.c_str());
+}
+
+void AssetBrowserPanel::RequestDelete(const eng::FileSystem::DirEntry& entry) {
+    m_deletePath        = entry.virtualPath;
+    m_deleteName        = entry.name;
+    m_deleteIsDirectory = entry.isDirectory;
+    m_openDeletePopup   = true;
+    m_deleteCount       = 0;
+
+    // HOW MUCH IS IN THERE, counted up front so the question can be specific.
+    // "Delete this folder and the 23 files in it?" can be answered; "are you
+    // sure?" cannot.
+    if (entry.isDirectory) {
+        std::error_code ec;
+        const fs::path  real = eng::FileSystem::Resolve(entry.virtualPath);
+        for (const auto& item : fs::recursive_directory_iterator(real, ec)) {
+            if (!item.is_directory(ec)) {
+                ++m_deleteCount;
+            }
+        }
+    }
+}
+
+void AssetBrowserPanel::DrawRenamePopup() {
+    if (m_openRenamePopup) {
+        ImGui::OpenPopup("Rename Asset");
+        m_openRenamePopup = false;
+    }
+
+    const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal("Rename Asset", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    ImGui::Text("Rename '%s' to:", m_renameOriginal.c_str());
+
+    if (ImGui::IsWindowAppearing()) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::SetNextItemWidth(320.0f);
+    const bool submitted =
+        ImGui::InputText("##assetname", m_renameBuffer, sizeof(m_renameBuffer),
+                         ImGuiInputTextFlags_EnterReturnsTrue);
+
+    // ---- renaming a script is not just a file operation ------------------
+    //
+    // Said BEFORE it happens rather than discovered afterwards. The class
+    // inside a .cpp keeps its old name, and the scene refers to the CLASS -
+    // so renaming the file alone changes nothing about what runs.
+    if (ClassifyAsset(m_renamePath) == AssetKind::Script) {
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                           "This only renames the FILE. The class inside it keeps its");
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                           "name, and that is what scenes refer to.");
+    }
+
+    const bool blank = m_renameBuffer[0] == '\0';
+    ImGui::BeginDisabled(blank);
+    if ((submitted && !blank) || ImGui::Button("Rename", ImVec2(120, 0))) {
+        std::string error;
+        if (eng::FileSystem::Rename(m_renamePath, m_renameBuffer, error)) {
+            m_statusIsError = false;
+            std::snprintf(m_status, sizeof(m_status), "renamed to %s", m_renameBuffer);
+            m_selectedPath.clear();
+            Refresh();
+        } else {
+            m_statusIsError = true;
+            std::snprintf(m_status, sizeof(m_status), "%s", error.c_str());
+            ENGINE_LOG_ERROR(eng::Channels::kEditor, "could not rename: {}", error);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+void AssetBrowserPanel::DrawDeletePopup() {
+    if (m_openDeletePopup) {
+        ImGui::OpenPopup("Delete Asset");
+        m_openDeletePopup = false;
+    }
+
+    const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (!ImGui::BeginPopupModal("Delete Asset", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    // ALWAYS ASKS, and this is the one dialog in the editor that genuinely
+    // has to. Deleting an entity goes through the undo stack; deleting a FILE
+    // does not and cannot - it is gone from the disk.
+    if (m_deleteIsDirectory) {
+        ImGui::Text("Delete the folder '%s'", m_deleteName.c_str());
+        ImGui::Text("and the %zu file(s) inside it?", m_deleteCount);
+    } else {
+        ImGui::Text("Delete '%s'?", m_deleteName.c_str());
+    }
+
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.45f, 1.0f),
+                       "This cannot be undone - Ctrl+Z does not reach the disk.");
+
+    if (ClassifyAsset(m_deletePath) == AssetKind::Script) {
+        ImGui::TextDisabled("Any entity using this script will show it as missing.");
+    } else if (ClassifyAsset(m_deletePath) == AssetKind::Texture) {
+        ImGui::TextDisabled("Any sprite using it will draw the missing-texture square.");
+    }
+
+    ImGui::Separator();
+
+    if (ImGui::Button("Delete", ImVec2(120, 0))) {
+        std::size_t removed = 0;
+        std::string error;
+        if (eng::FileSystem::Remove(m_deletePath, removed, error)) {
+            m_statusIsError = false;
+            std::snprintf(m_status, sizeof(m_status), "deleted %s (%zu item(s))",
+                          m_deleteName.c_str(), removed);
+            ENGINE_LOG_INFO(eng::Channels::kEditor, "deleted '{}' ({} item(s))",
+                            m_deletePath, removed);
+            m_selectedPath.clear();
+            Refresh();
+        } else {
+            m_statusIsError = true;
+            std::snprintf(m_status, sizeof(m_status), "%s", error.c_str());
+            ENGINE_LOG_ERROR(eng::Channels::kEditor, "could not delete: {}", error);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void AssetBrowserPanel::Draw() {
@@ -317,14 +592,70 @@ void AssetBrowserPanel::Draw() {
     if (m_entries.empty()) {
         ImGui::TextDisabled("this folder is empty");
     }
+
+    // ---- the keys this panel owns ---------------------------------------
+    //
+    // Checked INSIDE the grid's child window, because that is what has focus
+    // when you have just clicked a tile.
+    //
+    // Three guards, each earning its place. The panel must be FOCUSED, or
+    // Delete pressed while working in the Inspector would delete a file.
+    // WantTextInput must be false, or Delete while typing in the rename box
+    // would delete the thing being renamed - which is a genuinely alarming
+    // thing for a rename box to do. And something must actually be selected.
+    const ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !io.WantTextInput && !m_selectedPath.empty()) {
+
+        const auto selected = std::find_if(
+            m_entries.begin(), m_entries.end(),
+            [&](const eng::FileSystem::DirEntry& e) {
+                return e.virtualPath == m_selectedPath;
+            });
+
+        if (selected != m_entries.end()) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+                RequestDelete(*selected);
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+                RequestRename(*selected);
+            }
+        } else {
+            // The selection names something that is no longer in this folder
+            // - deleted, renamed, or we navigated away. Dropped rather than
+            // left pointing at nothing.
+            m_selectedPath.clear();
+        }
+    }
+
     ImGui::EndChild();
 
     DrawNewScriptPopup();
     DrawNewFolderPopup();
 
+    // OPENED FROM HERE, not from inside a tile. A modal opened while that
+    // tile's PushID is active belongs to that id, and simply never appears.
+    DrawRenamePopup();
+    DrawDeletePopup();
+
     if (m_status[0] != '\0') {
         ImGui::Separator();
-        ImGui::TextDisabled("%s", m_status);
+
+        // A FAILURE IS NOT GREY. The ordinary "created X" note is fine dim -
+        // it confirms something you watched happen. A refusal has to catch
+        // the eye, or it is only technically being reported, which is how
+        // "files cannot be opened" went unexplained in the first place.
+        if (m_statusIsError) {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(ImVec4(0.95f, 0.38f, 0.32f, 1.0f), "%s", m_status);
+            ImGui::PopTextWrapPos();
+            if (ImGui::SmallButton("Dismiss")) {
+                m_status[0]     = '\0';
+                m_statusIsError = false;
+            }
+        } else {
+            ImGui::TextDisabled("%s", m_status);
+        }
     }
 }
 

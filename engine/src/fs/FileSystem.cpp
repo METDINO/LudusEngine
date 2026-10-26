@@ -377,6 +377,92 @@ bool FileSystem::CreateDirectory(std::string_view virtualDirectory, std::string&
     return true;
 }
 
+bool FileSystem::Remove(std::string_view virtualPath, std::size_t& outDeletedCount,
+                        std::string& outError) {
+    outDeletedCount = 0;
+
+    // ========================================================================
+    //  AN EMPTY PATH IS THE ASSETS ROOT. Refused before anything else.
+    //
+    //  Resolve("") hands back the assets folder itself, so a caller that
+    //  passed an empty string through by mistake would delete the entire
+    //  project. Guarding here rather than at each call site means a new
+    //  caller cannot reintroduce it.
+    // ========================================================================
+    if (virtualPath.empty()) {
+        outError = "refusing to delete the assets folder itself";
+        return false;
+    }
+
+    const std::string real = Resolve(virtualPath);
+
+    std::error_code ec;
+    if (!fs::exists(real, ec)) {
+        outError = "'" + std::string(virtualPath) + "' is not there";
+        return false;
+    }
+
+    // remove_all handles both cases - one file, or a folder and its whole
+    // contents - and returns how many things it deleted, which is exactly
+    // what the confirmation dialog wants to be able to say.
+    const std::uintmax_t removed = fs::remove_all(real, ec);
+    if (ec) {
+        outError = "cannot delete '" + std::string(virtualPath) + "': " + ec.message();
+        return false;
+    }
+
+    outDeletedCount = static_cast<std::size_t>(removed);
+    outError.clear();
+    return true;
+}
+
+bool FileSystem::Rename(std::string_view virtualPath, std::string_view newName,
+                        std::string& outError) {
+    if (virtualPath.empty()) {
+        outError = "refusing to rename the assets folder itself";
+        return false;
+    }
+    if (newName.empty()) {
+        outError = "a name cannot be empty";
+        return false;
+    }
+
+    // A NAME, NOT A PATH. Letting a separator through would turn a rename
+    // into a move - including a move to somewhere outside the project, with
+    // "..". See the note on this function in the header.
+    if (newName.find('/') != std::string_view::npos ||
+        newName.find('\\') != std::string_view::npos) {
+        outError = "a name cannot contain a slash - rename does not move things";
+        return false;
+    }
+
+    const fs::path from = fs::path(Resolve(virtualPath));
+    const fs::path to   = from.parent_path() / fs::path(std::string(newName));
+
+    std::error_code ec;
+    if (!fs::exists(from, ec)) {
+        outError = "'" + std::string(virtualPath) + "' is not there";
+        return false;
+    }
+
+    // REFUSED rather than overwriting. Renaming one file onto another
+    // destroys the second one, and nothing about typing a name suggests that
+    // is what you are asking for.
+    if (fs::exists(to, ec)) {
+        outError = "there is already something called '" + std::string(newName) + "'";
+        return false;
+    }
+
+    fs::rename(from, to, ec);
+    if (ec) {
+        outError = "cannot rename '" + std::string(virtualPath) + "': " + ec.message();
+        return false;
+    }
+
+    outError.clear();
+    return true;
+}
+
 bool FileSystem::ReadTextFile(std::string_view virtualPath, std::string& outText,
                               std::string& outError) {
     // From an archive when one holds it. Text and bytes are the same thing to

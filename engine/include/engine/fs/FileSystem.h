@@ -99,6 +99,30 @@ public:
     // Creates a folder, including any missing parent folders.
     static bool CreateDirectory(std::string_view virtualDirectory, std::string& outError);
 
+    // ========================================================================
+    //  Deletes a file, or a folder AND EVERYTHING INSIDE IT.
+    //
+    //  `outDeletedCount` says how many things went, which is what lets the
+    //  editor ask "delete this folder and the 23 files in it?" rather than a
+    //  bare "are you sure?". The difference matters: one of those questions
+    //  can be answered and the other cannot.
+    //
+    //  AN EMPTY PATH IS REFUSED. An empty virtual path resolves to the assets
+    //  root, so a bug that passed one through would delete the entire
+    //  project. That is not a hypothetical worth leaving open.
+    // ========================================================================
+    static bool Remove(std::string_view virtualPath, std::size_t& outDeletedCount,
+                       std::string& outError);
+
+    // Renames a file or folder WITHIN ITS OWN FOLDER. `newName` is a bare
+    // name, not a path - moving things between folders is a different
+    // operation and giving one function both jobs is how you end up with a
+    // rename that silently moves something.
+    //
+    // Refuses when the target already exists, rather than overwriting it.
+    static bool Rename(std::string_view virtualPath, std::string_view newName,
+                       std::string& outError);
+
     // Reads a whole TEXT file - a scene, the config - into a std::string.
     //
     // std::string is used rather than a list of bytes because that is what the

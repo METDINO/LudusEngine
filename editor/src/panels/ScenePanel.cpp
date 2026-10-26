@@ -312,6 +312,25 @@ void ScenePanel::HandlePicking(const ImVec2& imageOrigin) {
         FrameSelection();
     }
 
+    // ---- Delete destroys the selection -------------------------------------
+    //
+    // FOCUSED rather than merely hovered, which is deliberately stricter than
+    // the F above. Framing the camera is harmless, so reacting to a mouse
+    // that happens to be passing over costs nothing; destroying an entity is
+    // not, and should take a click into this view first.
+    //
+    // Through the deferred queue, like every other delete - this runs while
+    // panels are still drawing and still describing the thing being removed.
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+
+        eng::Scene& scene = eng::Engine::Get().GetScene();
+        if (eng::Entity* selected = scene.Get(EditorState::Get().selected)) {
+            eng::DeferredOps::QueueDestroy(selected->Id());
+            EditorState::Get().dirty = true;
+        }
+    }
+
     // ---- left click selects ------------------------------------------------
     // Only when a handle is not being dragged, and on the press rather than
     // the release, so click-and-drag on a handle never also reselects.

@@ -20,6 +20,7 @@ set(EDITOR_SOURCES
     src/main.cpp
     src/EditorApp.cpp                    # the window, the menu bar, the panel list
     src/EditorGui.cpp                    # starting and stopping Dear ImGui
+    src/ShellOpen.cpp                    # handing a file to the operating system
     src/ObjectMenu.cpp                   # the one list of objects you can add
     src/ScriptBuild.cpp                  # finds a compiler and builds the project
     src/AssetDragDrop.cpp                # what happens when you drag a file onto something

@@ -277,6 +277,33 @@ void HierarchyPanel::Draw() {
         ImGui::EndPopup();
     }
 
+    // ---- the keys this panel owns ----------------------------------------
+    //
+    // Both need the panel FOCUSED, not merely hovered, and both need
+    // WantTextInput to be false. Delete while renaming an entity would
+    // otherwise delete the entity instead of a character.
+    //
+    // Destroying goes through the DEFERRED QUEUE, like every other delete in
+    // the editor: this runs while panels are still drawing and still holding
+    // on to what they are describing. See scene/DeferredOps.h.
+    const ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+        !io.WantTextInput) {
+
+        if (eng::Entity* selected = scene.Get(EditorState::Get().selected)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+                eng::DeferredOps::QueueDestroy(selected->Id());
+                EditorState::Get().dirty = true;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+                m_renameTarget    = selected->Id();
+                m_openRenamePopup = true;
+                std::snprintf(m_renameBuffer, sizeof(m_renameBuffer), "%s",
+                              selected->Name().c_str());
+            }
+        }
+    }
+
     DrawRenamePopup();
 }
 

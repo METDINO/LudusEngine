@@ -61,6 +61,31 @@ private:
     void DrawNewScriptPopup();
     void DrawNewFolderPopup();
 
+    // Right-click: Open, Show in File Explorer, Rename, Delete.
+    void DrawEntryContextMenu(const eng::FileSystem::DirEntry& entry);
+
+    // Both of these are MODAL and both are opened from Draw rather than from
+    // inside a tile's id scope - a popup opened while a PushID is active
+    // belongs to that id and never appears. Same reason the New Script popup
+    // works this way.
+    void DrawRenamePopup();
+    void DrawDeletePopup();
+
+    // Records what to act on and raises the flag Draw watches. Called from
+    // the context menu and from the Delete key.
+    void RequestRename(const eng::FileSystem::DirEntry& entry);
+    void RequestDelete(const eng::FileSystem::DirEntry& entry);
+
+    // Hands a file to the operating system, reporting either way. See
+    // ShellOpen.h for why the reporting matters more than it sounds.
+    void OpenInSystemEditor(const std::string& virtualPath);
+    void RevealAsset(const std::string& virtualPath);
+
+    // What the Delete key and the context menu act on. A virtual path rather
+    // than an index, because a refresh reorders the list and an index would
+    // then point at a different file.
+    std::string m_selectedPath;
+
     // Writes <the folder being browsed>/<name>.cpp from the template, then
     // compiles and loads it so it can be attached immediately. Returns false
     // with a reason - it refuses to overwrite, because silently replacing
@@ -85,6 +110,24 @@ private:
     bool  m_openNewScript     = false;
     bool  m_openNewFolder     = false;
     char  m_status[256]       = {};
+
+    // Whether m_status is a refusal rather than a confirmation, which decides
+    // how it is drawn. A failure shown in the same grey as a success is a
+    // failure nobody reads - see ShellOpen.h.
+    bool  m_statusIsError     = false;
+
+    // ---- the rename dialog ----------------------------------------------
+    std::string m_renamePath;            // what is being renamed
+    std::string m_renameOriginal;        // its current name, for the message
+    char        m_renameBuffer[128] = {};
+    bool        m_openRenamePopup   = false;
+
+    // ---- the delete dialog ------------------------------------------------
+    std::string m_deletePath;
+    std::string m_deleteName;
+    bool        m_deleteIsDirectory = false;
+    std::size_t m_deleteCount       = 0;   // how many files are inside a folder
+    bool        m_openDeletePopup   = false;
     float m_iconSize          = 72.0f;
 
 };
