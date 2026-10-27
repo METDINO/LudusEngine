@@ -97,7 +97,22 @@ public:
         return static_cast<const T*>(FindComponent(T::kTypeName));
     }
 
+    // Removes the FIRST component with this type name. Fine when a type can
+    // only sensibly appear once; see RemoveComponentAt when it cannot.
     bool RemoveComponent(std::string_view typeName);
+
+    // Removes the component at a position, which is what ComponentAt reports.
+    //
+    // THE REASON THIS EXISTS: an entity may hold several components of the
+    // same type - several scripts, most obviously - and RemoveComponent above
+    // finds them by name, so it would always take the first one. Asking the
+    // Inspector to remove the third script and watching the first disappear
+    // is not a small annoyance; it is the tool doing something other than
+    // what was asked.
+    //
+    // Positions shift when anything is removed, so an index is only good
+    // until the next change. Take it and use it, rather than storing it.
+    bool RemoveComponentAt(std::size_t index);
 
     std::size_t ComponentCount() const { return m_components.size(); }
     Component*  ComponentAt(std::size_t index);

@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace fire {
+namespace threading {
 class ThreadPool {
 public:
     explicit ThreadPool(std::size_t thread_count = std::thread::hardware_concurrency()) {

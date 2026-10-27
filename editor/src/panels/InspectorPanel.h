@@ -36,9 +36,28 @@
 //     like everything else. Deleting an entity from a panel in the middle of a
 //     frame is precisely the problem DeferredOps exists to prevent, and the
 //     editor does not get an exemption from the engine's rules.
+//
+//  ==========================================================================
+//  REMOVING A COMPONENT: the x on its header, or right-click the header.
+//
+//  Every component can be removed except the TRANSFORM, which every entity
+//  has by definition - Entity::Transform() builds one on demand if it is
+//  missing, so "removing" it would silently throw away the position and hand
+//  back a fresh one at the origin, taking any children with it. The x is left
+//  off that one header and the reason is offered as a tooltip.
+//
+//  Like the reparenting in the Hierarchy, the removal is RECORDED while
+//  drawing and carried out at the end of Draw. The panel is part-way through
+//  walking the component list at the point the x is clicked, and erasing from
+//  that list shifts everything after it down - which would skip a component
+//  at best. See the note on m_pendingRemoval.
 // ============================================================================
 
 #include "Panel.h"
+
+#include <engine/scene/Entity.h>
+
+#include <cstddef>
 
 namespace editor {
 
@@ -46,6 +65,24 @@ class InspectorPanel final : public Panel {
 public:
     const char* Title() const override { return "Inspector"; }
     void        Draw() override;
+
+private:
+    void ApplyPendingRemoval();
+
+    // Which component the x was clicked on, acted on once the list is no
+    // longer being walked.
+    //
+    // AN INDEX, paired with the id of the entity it belongs to. The index
+    // alone would be meaningless if the selection changed in between, and
+    // the pair is checked against the live entity before anything is removed
+    // - an index into a list that has since changed is exactly the kind of
+    // stale handle this editor refuses to keep.
+    struct PendingRemoval {
+        eng::EntityId entity{};
+        std::size_t   index     = 0;
+        bool          requested = false;
+    };
+    PendingRemoval m_pendingRemoval{};
 };
 
 class ToolbarPanel final : public Panel {

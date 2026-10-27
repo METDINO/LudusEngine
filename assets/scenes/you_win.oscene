@@ -1,0 +1,35 @@
+{
+  "_comment": "The scene GameRules asks for when the last pickup is collected, and the other half of the scene-loading example. It holds ONE entity with one script on it: a scene does not have to be a level. Press Space here and WinScreen asks for collector.oscene, which unloads this one and starts the game again.",
+  "_how_it_is_reached": "assets/scripts/GameRules.cpp calls eng::Engine::Get().RequestScene(\"scenes/you_win.oscene\"). Nothing in C++ knows this file exists - the name lives in a script, which is why adding a scene needs no engine change.",
+  "camera": {
+    "position": [
+      0.0,
+      0.0
+    ],
+    "zoom": 1.0
+  },
+  "entities": [
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "script": "WinScreen",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "WinScreen"
+    }
+  ],
+  "name": "YouWin"
+}

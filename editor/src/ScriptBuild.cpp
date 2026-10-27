@@ -834,8 +834,8 @@ namespace {
 // is the opposite of what a pool is for. A function-local static is created
 // once, on first use, with no start-up cost for an editor session that never
 // builds anything.
-fire::ThreadPool& BuildPool() {
-    static fire::ThreadPool pool{1};   // one worker: builds are serialised anyway
+threading::ThreadPool& BuildPool() {
+    static threading::ThreadPool pool{1};   // one worker: builds are serialised anyway
     return pool;
 }
 

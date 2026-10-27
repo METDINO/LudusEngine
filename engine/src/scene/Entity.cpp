@@ -123,6 +123,20 @@ bool Entity::RemoveComponent(std::string_view typeName) {
     return true;
 }
 
+bool Entity::RemoveComponentAt(std::size_t index) {
+    if (index >= m_components.size() || m_components[index] == nullptr) {
+        return false;
+    }
+
+    // OnDetach FIRST, while the component is still fully formed and still
+    // owned by this entity - the same order the destructor above uses, and
+    // for the same reason. A component that unhooks itself from a system
+    // needs to still exist while it does it.
+    m_components[index]->OnDetach();
+    m_components.erase(m_components.begin() + static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
 Component* Entity::ComponentAt(std::size_t index) {
     return (index < m_components.size()) ? m_components[index].get() : nullptr;
 }

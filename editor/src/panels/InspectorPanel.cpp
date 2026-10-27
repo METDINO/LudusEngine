@@ -11,6 +11,7 @@
 
 #include "AssetDragDrop.h"
 #include "EditorApp.h"
+#include "ShellOpen.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>   // GetCurrentWindow, for a whole-window drop target
@@ -334,10 +335,56 @@ void DrawSpin(eng::SpinComponent& spin) {
 // ---------------------------------------------------------------------------
 //  ScriptComponent
 // ---------------------------------------------------------------------------
+// The script's name, drawn as a link that opens the file it came from in
+// whatever this machine uses for .cpp files - the same thing double-clicking
+// it in the Assets panel does. See ShellOpen.h.
+//
+// WHY A LOOKUP IS NEEDED AT ALL: a ScriptComponent stores a name, not a path,
+// so the file has to be found again. That walks the assets tree, which is why
+// it happens on the CLICK rather than every frame while the link is merely on
+// screen - see ScriptPathFromName.
+//
+// The consequence is that the link is drawn without knowing whether there is
+// a file behind it. Reporting a miss when somebody asks is honest and costs
+// nothing; scanning the disk sixty times a second to grey out a label would
+// cost a great deal.
+void DrawScriptNameLink(const eng::ScriptComponent& script, ImVec4 colour) {
+    ImGui::PushStyleColor(ImGuiCol_TextLink, colour);
+    const bool clicked = ImGui::TextLink(script.ScriptName().c_str());
+    ImGui::PopStyleColor();
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Open %s in the program this machine uses for that kind "
+                          "of file", script.ScriptName().c_str());
+    }
+    if (!clicked) {
+        return;
+    }
+
+    const std::string path = ScriptPathFromName(script.ScriptName());
+    if (path.empty()) {
+        // AT ERROR, not Warning: the project's log threshold discards
+        // warnings, and a link that does nothing and says nothing is the
+        // exact failure this feature exists to avoid. Same reasoning as
+        // ShellOpen.h.
+        ENGINE_LOG_ERROR(eng::Channels::kEditor,
+                         "no file for the script '{}' was found under assets/ - a "
+                         "script is opened by looking for a file named after it",
+                         script.ScriptName());
+        return;
+    }
+
+    std::string error;
+    if (OpenExternally(path, error)) {
+        ENGINE_LOG_INFO(eng::Channels::kEditor, "opened {}", path);
+    } else {
+        ENGINE_LOG_ERROR(eng::Channels::kEditor, "could not open '{}': {}", path, error);
+    }
+}
+
 void DrawScript(eng::ScriptComponent& script) {
     if (script.IsResolved()) {
-        ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.60f, 1.0f), "%s",
-                           script.ScriptName().c_str());
+        DrawScriptNameLink(script, ImVec4(0.55f, 0.85f, 0.60f, 1.0f));
 
         // WHICH HOOKS THIS SCRIPT ACTUALLY HAS.
         //
@@ -352,8 +399,13 @@ void DrawScript(eng::ScriptComponent& script) {
         // RED AND LOUD. A script that silently does nothing because it was
         // never compiled is the worst failure this feature can have, so it is
         // the most prominent thing in the panel.
-        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f), "%s  -  NOT FOUND",
-                           script.ScriptName().c_str());
+        //
+        // STILL A LINK, and if anything more useful as one: "this is not
+        // running" is the moment you most want to open the file and find out
+        // why. Not being compiled in does not mean the file is missing.
+        DrawScriptNameLink(script, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f), " -  NOT FOUND");
         ImGui::TextWrapped("No script with that name is compiled into this build, so it "
                            "is attached and will be saved, but it does not run. Rebuild "
                            "the project and start the editor again - the connection is "
@@ -380,7 +432,55 @@ void DrawScript(eng::ScriptComponent& script) {
 
 } // namespace
 
+void InspectorPanel::ApplyPendingRemoval() {
+    if (!m_pendingRemoval.requested) {
+        return;
+    }
+
+    // Taken and CLEARED FIRST, so an early return below cannot leave a
+    // request that tries again on every frame for the rest of the session.
+    const PendingRemoval request = m_pendingRemoval;
+    m_pendingRemoval             = {};
+
+    eng::Entity* entity = eng::Engine::Get().GetScene().Get(request.entity);
+    if (entity == nullptr) {
+        return;   // destroyed between the click and here; the id did its job
+    }
+
+    // CHECKED AGAIN, not trusted. The index was true when the x was clicked,
+    // and anything that ran in between could have changed the list - so the
+    // component at that position is confirmed to still be the kind that may
+    // be removed before anything is erased.
+    eng::Component* component = entity->ComponentAt(request.index);
+    if (component == nullptr) {
+        return;
+    }
+    const std::string typeName = component->TypeName();
+    if (typeName == eng::TransformComponent::kTypeName) {
+        ENGINE_LOG_ERROR(eng::Channels::kEditor,
+                         "refused to remove the transform from '{}' - every entity "
+                         "has one", entity->Name());
+        return;
+    }
+
+    if (entity->RemoveComponentAt(request.index)) {
+        EditorState::Get().dirty = true;
+        ENGINE_LOG_INFO(eng::Channels::kEditor, "removed {} from '{}'", typeName,
+                        entity->Name());
+    }
+}
+
 void InspectorPanel::Draw() {
+    // FIRST, before anything reads the component list - including the early
+    // return below for "nothing is selected". Carrying it out at the end of
+    // Draw instead would look the same almost always, and then quietly strand
+    // the request on the one path that returns early: click the x, click away
+    // before the next frame, and the removal would sit there unapplied.
+    //
+    // The cost is that the component stays on screen for the remainder of the
+    // frame its x was clicked on, which at sixty frames a second nobody sees.
+    ApplyPendingRemoval();
+
     EditorState& state = EditorState::Get();
     eng::Scene&  scene = eng::Engine::Get().GetScene();
 
@@ -436,18 +536,118 @@ void InspectorPanel::Draw() {
 
     ImGui::Separator();
 
-    entity->ForEachComponent([&](eng::Component& component) {
+    // WALKED BY INDEX rather than with ForEachComponent, because removing
+    // needs to say WHICH component - not which type. An entity can hold
+    // several scripts, and "remove the ScriptComponent" would always take the
+    // first one however far down the list the x was clicked. See
+    // Entity::RemoveComponentAt.
+    //
+    // Re-reading ComponentCount each time round is what makes it safe for the
+    // body to add a component, which is the same reason ForEachComponent is
+    // written this way. Removal is deferred and so does not come into it.
+    for (std::size_t i = 0; i < entity->ComponentCount(); ++i) {
+        eng::Component* componentPtr = entity->ComponentAt(i);
+        if (componentPtr == nullptr) {
+            continue;
+        }
+        eng::Component& component = *componentPtr;
+
         // PushID makes every widget inside this block unique to this
         // component, so two components with a field called "Offset" do not end
         // up sharing one widget.
+        //
+        // Keyed on the ADDRESS rather than the index, so that a header you
+        // opened stays open when something above it is removed and everything
+        // below shifts up a place.
         ImGui::PushID(&component);
 
-        if (ImGui::CollapsingHeader(component.TypeName(),
-                                    ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::string_view typeName = component.TypeName();
+
+        // THE TRANSFORM IS THE ONE THAT STAYS. Every entity has one by
+        // definition; see the note in InspectorPanel.h.
+        const bool removable = typeName != eng::TransformComponent::kTypeName;
+
+        // A SCRIPT IS NAMED AFTER THE SCRIPT, not after the class that holds
+        // it. "ScriptComponent" is an implementation detail of the engine;
+        // what you attached was PlayerMovement, and that is what you are
+        // looking for when you scan the panel.
+        //
+        // It also makes several scripts on one entity tellable apart. Three
+        // headers all reading "ScriptComponent" mean opening each one to find
+        // out which is which - and now that a header carries a remove button,
+        // guessing is expensive.
+        //
+        // The "(Script)" suffix is how Unity writes the same thing, and it
+        // earns its place: without it a bare "PlayerMovement" sitting between
+        // "SpriteComponent" and "AABBColliderComponent" gives no clue what
+        // kind of thing it is.
+        //
+        // EVERYTHING AFTER ### IS THE IDENTITY, and the part before it is
+        // only what you read. ImGui normally derives a widget's identity from
+        // its label, which would mean rebinding a script - renaming this
+        // header - counted as a different header, and the one you had open
+        // would spring back to its default. The visible text is now free to
+        // change without the panel rearranging itself underneath you. See the
+        // note about widget identity in Panel.h.
+        char header[128];
+        if (typeName == eng::ScriptComponent::kTypeName) {
+            const std::string& scriptName =
+                static_cast<eng::ScriptComponent&>(component).ScriptName();
+            if (scriptName.empty()) {
+                std::snprintf(header, sizeof(header),
+                              "Script (nothing bound yet)###component");
+            } else {
+                std::snprintf(header, sizeof(header), "%s (Script)###component",
+                              scriptName.c_str());
+            }
+        } else {
+            std::snprintf(header, sizeof(header), "%s###component",
+                          component.TypeName());
+        }
+
+        // CollapsingHeader draws its own x when given somewhere to report it,
+        // which is the ordinary way a panel like this offers "remove". `keep`
+        // comes back false on the frame the x is clicked.
+        bool       keep = true;
+        const bool open = removable
+                              ? ImGui::CollapsingHeader(header, &keep,
+                                                        ImGuiTreeNodeFlags_DefaultOpen)
+                              : ImGui::CollapsingHeader(header,
+                                                        ImGuiTreeNodeFlags_DefaultOpen);
+
+        // The same thing by right-click, because an x is easy to miss and
+        // impossible to find by looking for the word "remove". Attached to the
+        // header, which is the item just drawn.
+        if (ImGui::BeginPopupContextItem("component-actions")) {
+            if (ImGui::MenuItem("Remove Component", nullptr, false, removable)) {
+                keep = false;
+            }
+            if (!removable) {
+                ImGui::TextDisabled("Every entity has a transform.");
+            }
+            ImGui::EndPopup();
+        }
+
+        if (!removable && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Every entity has a transform, so this one cannot "
+                              "be removed.");
+        }
+
+        if (!keep) {
+            // RECORDED, NOT DONE. This loop is walking the component list;
+            // erasing from it here shifts every later component down a place
+            // and the loop would step straight over one. Carried out by
+            // ApplyPendingRemoval at the end of Draw.
+            m_pendingRemoval.entity    = entity->Id();
+            m_pendingRemoval.index     = i;
+            m_pendingRemoval.requested = true;
+        }
+
+        if (open) {
             // Work out which kind of component this is and call the matching
             // draw function. Comparing type NAMES is the same way the scene
             // file identifies components.
-            const std::string_view type = component.TypeName();
+            const std::string_view type = typeName;
 
             if (type == eng::TransformComponent::kTypeName) {
                 DrawTransform(static_cast<eng::TransformComponent&>(component), running);
@@ -470,7 +670,7 @@ void InspectorPanel::Draw() {
             }
         }
         ImGui::PopID();
-    });
+    }
 
     ImGui::Separator();
     ImGui::SeparatorText("Add component");

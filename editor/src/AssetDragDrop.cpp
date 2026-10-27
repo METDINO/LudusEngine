@@ -5,10 +5,12 @@
 #include "AssetDragDrop.h"
 
 #include "EditorApp.h"
+#include "ScriptBuild.h"
 
 #include <imgui.h>
 
 #include <cctype>
+#include <vector>
 
 namespace editor {
 namespace {
@@ -85,6 +87,28 @@ std::string ScriptNameFromPath(std::string_view virtualPath) {
         name = name.substr(0, dot);
     }
     return std::string(name);
+}
+
+std::string ScriptPathFromName(std::string_view scriptName) {
+    if (scriptName.empty()) {
+        return {};
+    }
+
+    // The same list the compiler is given, so this finds a script wherever it
+    // has been put - which is the whole point of the project having no
+    // designated scripts folder. See ScriptBuild::GatherSources.
+    const ScriptBuild::Sources sources = ScriptBuild::GatherSources();
+
+    // .cpp first. A script defined in a header is the unusual case, and if
+    // both somehow exist the compiled one is the one actually being built.
+    for (const std::vector<std::string>* list : {&sources.compiled, &sources.headers}) {
+        for (const std::string& path : *list) {
+            if (ScriptNameFromPath(path) == scriptName) {
+                return path;
+            }
+        }
+    }
+    return {};
 }
 
 bool ApplyAssetToEntity(eng::EntityId target, std::string_view virtualPath,

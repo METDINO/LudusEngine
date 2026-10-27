@@ -89,7 +89,8 @@ public:
             m_secondsLeft -= deltaSeconds;
 
             if (collected >= m_totalPickups && m_totalPickups > 0) {
-                m_phase = Phase::Won;
+                m_phase        = Phase::Won;
+                m_untilWinScene = kWinSceneDelay;
                 ENGINE_LOG_INFO(eng::Channels::kGame,
                                 "WIN, with {:.1f} seconds to spare",
                                 static_cast<double>(m_secondsLeft));
@@ -99,6 +100,21 @@ public:
                 ENGINE_LOG_INFO(eng::Channels::kGame, "out of time, with {}/{} collected",
                                 collected, m_totalPickups);
             }
+        } else if (m_phase == Phase::Won) {
+            // ---- CHANGING SCENE, which is the point of this part ----------
+            //
+            // A short pause first, so "YOU WIN" is readable and the last
+            // pickup is visibly gone before the screen changes. A cut on the
+            // same frame as the final collision reads as a glitch rather than
+            // as a result.
+            //
+            // The countdown uses deltaSeconds for the same reason the round
+            // timer does: it is the fixed step, so the pause is the same
+            // length on every machine.
+            m_untilWinScene -= deltaSeconds;
+            if (m_untilWinScene <= 0.0f) {
+                RequestWinScene();
+            }
         }
 
         DrawHud(collected);
@@ -106,6 +122,39 @@ public:
 
 private:
     enum class Phase { Playing, Won, Lost };
+
+    // -------------------------------------------------------------------------
+    //  OPENING ANOTHER SCENE FROM A SCRIPT
+    //
+    //      eng::Engine::Get().RequestScene("scenes/you_win.oscene");
+    //
+    //  REQUEST, never Load. The difference is not a style preference:
+    //
+    //    * LoadScene happens at once. Loading unloads the current scene,
+    //      which destroys every entity, which destroys every component -
+    //      INCLUDING THIS SCRIPT, whose OnUpdate is part way through running.
+    //      The call would return into an object that has been freed, and the
+    //      next line to read a member reads deleted memory. It usually seems
+    //      to work, which is what makes it dangerous.
+    //
+    //    * RequestScene writes the name down. The engine carries it out at
+    //      the end of the frame, once no system is walking a list of entities
+    //      and no script is mid-update. It is the same arrangement as
+    //      DeferredOps::QueueDestroy, for a sharper version of the reason.
+    //
+    //  Nothing calls "unload". Loading a scene unloads the old one first, and
+    //  that releases every texture nothing else is using - the Console line
+    //  about images still loaded is that happening.
+    // -------------------------------------------------------------------------
+    void RequestWinScene() {
+        if (m_requested) {
+            return;   // asked already; OnUpdate keeps running until the swap
+        }
+        m_requested = true;
+
+        ENGINE_LOG_INFO(eng::Channels::kGame, "GameRules: opening {}", kWinScene);
+        eng::Engine::Get().RequestScene(kWinScene);
+    }
 
     int CountPickups() const {
         eng::Scene* scene = GetScene();
@@ -146,12 +195,22 @@ private:
         }
     }
 
-    int   m_totalPickups = 0;
-    float m_secondsLeft  = 0.0f;
-    Phase m_phase        = Phase::Playing;
+    int   m_totalPickups   = 0;
+    float m_secondsLeft    = 0.0f;
+    Phase m_phase          = Phase::Playing;
+    float m_untilWinScene  = 0.0f;
+    bool  m_requested      = false;
 
     // How long the round lasts. Try changing it.
     static constexpr float kTimeLimit = 60.0f;
+
+    // How long "YOU WIN" stays on this scene before the next one opens.
+    static constexpr float kWinSceneDelay = 1.5f;
+
+    // The scene to open. A name rather than a build-list number, because this
+    // is a particular screen rather than "the next level" - see
+    // RequestSceneByIndex in engine/include/engine/Engine.h for the other way.
+    static constexpr const char* kWinScene = "scenes/you_win.oscene";
 };
 
 } // namespace

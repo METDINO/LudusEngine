@@ -360,6 +360,70 @@ bool Engine::LoadSceneByIndex(std::size_t index, std::string& outError) {
     return LoadScene(BuildScenes::PathAt(index), outError);
 }
 
+void Engine::RequestScene(std::string_view virtualPath) {
+    if (virtualPath.empty()) {
+        ENGINE_LOG_ERROR(Channels::kScene,
+                         "a scene was requested with an empty path, which names no "
+                         "file - the request has been ignored");
+        return;
+    }
+
+    // Asking twice in one frame is not an error, but it is worth saying: two
+    // scripts each trying to change level means only one of them happens, and
+    // finding that out from the Console beats finding it out from behaviour.
+    if (m_hasSceneRequest && m_requestedScene != virtualPath) {
+        ENGINE_LOG_WARN(Channels::kScene,
+                        "'{}' was already requested this frame; '{}' replaces it",
+                        m_requestedScene, virtualPath);
+    }
+
+    m_requestedScene.assign(virtualPath);
+    m_hasSceneRequest = true;
+}
+
+void Engine::RequestSceneByIndex(std::size_t index) {
+    // CHECKED HERE rather than at the end of the frame. A bad index is a
+    // mistake in a script, and a message that arrives while the script that
+    // caused it is on the stack is worth far more than one that turns up
+    // later with no context.
+    if (index >= BuildScenes::Count()) {
+        ENGINE_LOG_ERROR(Channels::kScene,
+                         "there is no scene {} in the build list; it holds {} scene(s)",
+                         index, BuildScenes::Count());
+        return;
+    }
+    RequestScene(BuildScenes::PathAt(index));
+}
+
+void Engine::ApplyPendingSceneRequest() {
+    if (!m_hasSceneRequest) {
+        return;
+    }
+
+    // Taken and CLEARED FIRST. A load that fails must not leave the request
+    // in place to be retried on every frame for the rest of the run - that
+    // turns one error message into a flood and the game never recovers.
+    const std::string path = m_requestedScene;
+    m_requestedScene.clear();
+    m_hasSceneRequest = false;
+
+    // ANYTHING QUEUED AGAINST THE OLD SCENE MUST NOT SURVIVE IT.
+    //
+    // A queued destroy names an EntityId, and the scene about to be loaded
+    // reuses the same slot indices from scratch. A leftover id would stand a
+    // real chance of matching a brand new entity and destroying something
+    // nobody asked to destroy, on the first frame of the new level. Messages
+    // carry entity ids for the same reason and go for the same reason.
+    DeferredOps::Clear();
+    MessageBus::ClearQueue();
+
+    std::string error;
+    if (!LoadScene(path, error)) {
+        ENGINE_LOG_ERROR(Channels::kScene, "could not open the requested scene '{}': {}",
+                         path, error);
+    }
+}
+
 bool Engine::LoadScene(std::string_view virtualPath, std::string& outError) {
     if (m_scene == nullptr) {
         outError = "the scene subsystem is not running";
@@ -520,6 +584,18 @@ void Engine::Simulate() {
     if (m_scene != nullptr) {
         DeferredOps::Apply(*m_scene);
     }
+
+    // CHANGING LEVEL, at the only moment it is safe to.
+    //
+    // Right here: after the step loop, so no system is mid-update; after the
+    // deferred queue, so nothing is still owed against the scene being
+    // replaced. A script asked for this during its OnUpdate, where carrying
+    // it out would have destroyed the script while it was running. See
+    // Engine::RequestScene.
+    //
+    // Before the camera below, so the new scene's camera takes effect on the
+    // very frame it loads rather than one frame late.
+    ApplyPendingSceneRequest();
 
     // AND THE CAMERA, for exactly the same reason as the queue above.
     //

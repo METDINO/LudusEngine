@@ -147,13 +147,46 @@ public:
     // past the end of the list, because that is a mistake in a script and a
     // script's mistake belongs in the Console.
     //
-    // CAUTION, and it is the same caution LoadScene carries: loading destroys
-    // every entity in the current scene. Calling this from inside a script's
-    // OnUpdate pulls the ground out from under the system that is part way
-    // through calling it. Until the engine has a deferred scene load, a script
-    // that wants to change level should set a flag of its own and act on it at
-    // the top of the next step.
+    // CAUTION: loading destroys every entity in the current scene. Calling
+    // this from inside a script's OnUpdate pulls the ground out from under
+    // the system that is part way through calling it - including the script
+    // object itself. A SCRIPT SHOULD CALL RequestScene INSTEAD; see below.
     bool LoadSceneByIndex(std::size_t index, std::string& outError);
+
+    // ========================================================================
+    //  CHANGING LEVEL FROM A SCRIPT. This is the one to use.
+    //
+    //      eng::Engine::Get().RequestScene("scenes/you_win.oscene");
+    //
+    //  The request is written down and carried out at the end of the frame,
+    //  once nothing is walking a list of entities or systems any more. It is
+    //  the same arrangement DeferredOps uses for destroying an entity, and it
+    //  exists for a sharper version of the same reason.
+    //
+    //  WHY A SCRIPT MUST NOT CALL LoadScene DIRECTLY. Loading unloads the old
+    //  scene, which destroys every entity, which detaches every component,
+    //  which destroys the behaviour object whose OnUpdate is RUNNING AT THAT
+    //  MOMENT. The call returns into a `this` that no longer exists, and the
+    //  next line to touch a member reads freed memory. It will often appear
+    //  to work, which is the worst property a bug of this kind can have.
+    //
+    //  Setting a flag and loading at the top of the next step does not fix
+    //  it: the top of the next step is still inside ScriptSystem::Update,
+    //  walking a list of script pointers that the load is about to free.
+    //
+    //  Asking twice in one frame is not an error; the last request wins. A
+    //  request is dropped if the engine stops before the frame ends.
+    // ========================================================================
+    void RequestScene(std::string_view virtualPath);
+
+    // The same thing by build-list number. An index that is not in the list
+    // is reported HERE, where the mistake was made, rather than silently
+    // doing nothing at the end of the frame.
+    void RequestSceneByIndex(std::size_t index);
+
+    // Whether a request is waiting. Mostly for tests and for a script that
+    // wants to stop doing things once it has asked to leave.
+    bool HasPendingSceneRequest() const { return m_hasSceneRequest; }
 
     // The opposite: pushes the LIVE camera into the scene, then writes it out.
     // Pass an empty path to save over wherever it came from.
@@ -279,6 +312,13 @@ private:
 
     // The scene as it was when Play was pressed, so Stop can put it back.
     std::string m_playModeSnapshot;
+
+    // A scene a script has asked for, carried out at the end of the frame.
+    // See RequestScene.
+    std::string m_requestedScene;
+    bool        m_hasSceneRequest = false;
+
+    void ApplyPendingSceneRequest();
 };
 
 } // namespace eng

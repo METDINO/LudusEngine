@@ -61,6 +61,21 @@ const char* PayloadIdFor(AssetKind kind);
 // that is looked up by NAME.
 std::string ScriptNameFromPath(std::string_view virtualPath);
 
+// The other direction: "PlayerMovement" -> "enemies/PlayerMovement.cpp".
+//
+// A ScriptComponent stores a NAME, because that is what survives a file being
+// moved to a different folder. Opening the file it came from means finding it
+// again, and the only thing tying the two together is the convention that a
+// script lives in a file called after it - the same assumption
+// ScriptNameFromPath makes in reverse when you drag a .cpp onto an entity.
+//
+// Headers are searched as well as .cpp files, because a script written
+// entirely in a header is a script like any other. See ScriptBuild::Sources.
+//
+// Returns an empty string when nothing matches. THIS WALKS THE WHOLE assets/
+// TREE, so call it when somebody asks for the file - not every frame.
+std::string ScriptPathFromName(std::string_view scriptName);
+
 // Applies a dropped file to an entity that already exists. Returns false with
 // a reason when the drop makes no sense - dropping a scene onto an entity, say
 // - so the caller can explain rather than silently doing nothing.

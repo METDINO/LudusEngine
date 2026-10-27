@@ -71,6 +71,7 @@ namespace {
 
 class PlayerMovement final : public eng::ScriptBehaviour {
 public:
+    float movementSpeed = 1;
     void OnStart() {
         ENGINE_LOG_INFO(eng::Channels::kGame, "PlayerMovement started on '{}'",
                         Owner() != nullptr ? Owner()->Name() : "<none>");
