@@ -38,7 +38,10 @@ void HierarchyPanel::DrawNode(eng::Entity& entity) {
     if (isLeaf) {
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     }
-    if (state.selected == entity.Id()) {
+    // EVERY member of the selection is highlighted, not just the active one.
+    // A multi-selection you cannot see is worse than none, because the next
+    // Delete acts on all of it.
+    if (state.IsSelected(entity.Id())) {
         flags |= ImGuiTreeNodeFlags_Selected;
     }
 
@@ -51,6 +54,12 @@ void HierarchyPanel::DrawNode(eng::Entity& entity) {
 
     const bool open = ImGui::TreeNodeEx(label, flags);
 
+    // WHERE THIS ROW IS, recorded in the order rows are drawn. A Shift-range
+    // and the marquee both need to know what is above what, and this is the
+    // only place that knows. See HierarchyPanel::Row.
+    m_rows.push_back(Row{entity.Id(), ImRect(ImGui::GetItemRectMin(),
+                                             ImGui::GetItemRectMax())});
+
     // This row can be picked up and dropped on another one. Before the click
     // handling below, because a drag is not a click and ImGui needs to see
     // the source first to decide which it is.
@@ -59,7 +68,7 @@ void HierarchyPanel::DrawNode(eng::Entity& entity) {
     // IsItemToggledOpen tells clicking the expand arrow apart from clicking
     // the row, so opening a branch does not also change the selection.
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-        state.selected = entity.Id();   // an ID. Never a pointer.
+        HandleRowClick(entity.Id());
     }
 
     // A drop target for this row, placed immediately after the row was drawn
@@ -108,6 +117,143 @@ void HierarchyPanel::DrawNode(eng::Entity& entity) {
     }
 }
 
+void HierarchyPanel::HandleRowClick(eng::EntityId id) {
+    EditorState&   state = EditorState::Get();
+    const ImGuiIO& io    = ImGui::GetIO();
+
+    if (io.KeyShift && !state.selected.IsNull()) {
+        // DEFERRED, because the other end of the range may be a row further
+        // down that has not been drawn yet - so m_rows does not contain it
+        // and the range cannot be worked out until Draw has finished. See
+        // ApplyPendingRange.
+        m_pendingRangeTo  = id;
+        m_hasPendingRange = true;
+        return;
+    }
+
+    if (io.KeyCtrl) {
+        state.ToggleSelection(id);
+        return;
+    }
+
+    // THE PLAIN CLICK, and the one case that needs care: clicking a row that
+    // is already part of a multi-selection must NOT collapse the selection
+    // to that one row, because the usual next move is to drag the whole set
+    // somewhere. It only becomes active. Letting go without dragging is what
+    // narrows it down - but ImGui has already told us this was a click
+    // rather than a drag by the time we are here, so the narrowing happens
+    // immediately and the drag case is handled by the drag source, which
+    // carries the whole selection.
+    state.SelectOnly(id);
+}
+
+void HierarchyPanel::ApplyPendingRange() {
+    if (!m_hasPendingRange) {
+        return;
+    }
+    const eng::EntityId target = m_pendingRangeTo;
+    m_pendingRangeTo           = eng::EntityId{};
+    m_hasPendingRange          = false;
+
+    EditorState& state = EditorState::Get();
+
+    // Both ends, as POSITIONS IN THE DISPLAYED ORDER. "Everything between"
+    // means everything between them on screen, which is not the same as
+    // anything about the scene's own ordering or the parent tree - a range
+    // can start in one branch and finish in another.
+    std::size_t from = m_rows.size();
+    std::size_t to   = m_rows.size();
+    for (std::size_t i = 0; i < m_rows.size(); ++i) {
+        if (m_rows[i].id == state.selected) {
+            from = i;
+        }
+        if (m_rows[i].id == target) {
+            to = i;
+        }
+    }
+    if (from == m_rows.size() || to == m_rows.size()) {
+        // One end is not on screen - a collapsed branch, or the filter is
+        // hiding it. Falling back to selecting just the clicked row is what
+        // every list does, and it is better than doing nothing.
+        state.SelectOnly(target);
+        return;
+    }
+
+    if (from > to) {
+        std::swap(from, to);
+    }
+
+    // The anchor stays where it was, so Shift-clicking again from the same
+    // place grows or shrinks the range rather than walking it along.
+    const eng::EntityId anchor = state.selected;
+    state.ClearSelection();
+    for (std::size_t i = from; i <= to; ++i) {
+        state.AddToSelection(m_rows[i].id);
+    }
+    state.selected = anchor;
+}
+
+void HierarchyPanel::DrawMarquee() {
+    EditorState& state  = EditorState::Get();
+    ImGuiIO&     io     = ImGui::GetIO();
+    ImDrawList*  draw   = ImGui::GetWindowDrawList();
+
+    // ---- starting one ------------------------------------------------------
+    //
+    // Only from EMPTY space. Pressing on a row already means something, and
+    // a box that started from a row would fight the reparent drag for the
+    // same gesture.
+    if (!m_marqueeActive && ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() &&
+        !ImGui::IsAnyItemActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+
+        m_marqueeActive = true;
+        m_marqueeStart  = io.MousePos;
+        m_marqueeAdds   = io.KeyCtrl;
+
+        // Remembered so the box can be reversible. Without this, sweeping
+        // over a row and back off it would leave it selected, and a box you
+        // cannot take back is a box you have to undo by hand.
+        m_marqueeBaseline = state.selection;
+    }
+
+    if (!m_marqueeActive) {
+        return;
+    }
+
+    // ---- finishing -------------------------------------------------------
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        m_marqueeActive = false;
+        m_marqueeBaseline.clear();
+        return;
+    }
+
+    // ImRect wants its corners the right way round, and a box can be dragged
+    // in any direction - up and to the left is not unusual.
+    const ImVec2 a = m_marqueeStart;
+    const ImVec2 b = io.MousePos;
+    const ImRect box(ImVec2(a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y),
+                     ImVec2(a.x > b.x ? a.x : b.x, a.y > b.y ? a.y : b.y));
+
+    // RECOMPUTED FROM THE BASELINE EVERY FRAME rather than added to as the
+    // box grows. That is what makes shrinking the box give the rows back.
+    state.selection = m_marqueeAdds ? m_marqueeBaseline : std::vector<eng::EntityId>{};
+    if (!m_marqueeAdds) {
+        state.selected = eng::EntityId{};
+    }
+
+    for (const Row& row : m_rows) {
+        if (box.Overlaps(row.rect)) {
+            state.AddToSelection(row.id);
+        }
+    }
+
+    // Drawn last so it sits over the rows. A fill as well as an outline,
+    // because an outline alone over a list of highlighted rows is hard to
+    // pick out.
+    draw->AddRectFilled(box.Min, box.Max, IM_COL32(120, 190, 250, 40));
+    draw->AddRect(box.Min, box.Max, IM_COL32(120, 190, 250, 200));
+}
+
 void HierarchyPanel::DrawEntityDragSource(eng::Entity& entity) {
     if (!ImGui::BeginDragDropSource()) {
         return;
@@ -118,12 +264,29 @@ void HierarchyPanel::DrawEntityDragSource(eng::Entity& entity) {
     // drop, so nothing has to stay alive in the meantime - and an EntityId
     // that refers to something destroyed mid-drag is still safe to look up
     // and simply comes back as nothing.
+    // DRAGGING A SELECTED ROW DRAGS THE WHOLE SELECTION, which is what makes
+    // bulk reparenting possible at all. Dragging an UNSELECTED row selects
+    // it first and drags only it - picking something up is a way of choosing
+    // it, and carrying off a set you are not pointing at would be a surprise.
+    EditorState& state = EditorState::Get();
+    if (!state.IsSelected(entity.Id())) {
+        state.SelectOnly(entity.Id());
+    }
+
+    // The payload still carries ONE id - the row actually grabbed. The rest
+    // of the set is read from the selection at the drop. Putting a whole
+    // list in the payload would mean a second copy of it that could disagree
+    // with the real one.
     const eng::EntityId id = entity.Id();
     ImGui::SetDragDropPayload(kPayloadEntity, &id, sizeof(id));
 
     // What rides under the cursor. Without this the drag is invisible and
     // feels broken even when it works.
-    ImGui::Text("%s", entity.Name().c_str());
+    if (state.selection.size() > 1) {
+        ImGui::Text("%zu entities", state.selection.size());
+    } else {
+        ImGui::Text("%s", entity.Name().c_str());
+    }
 
     ImGui::EndDragDropSource();
 }
@@ -160,6 +323,24 @@ bool HierarchyPanel::ReparentIsLegal(eng::EntityId child, eng::EntityId parent) 
     return !parentEntity->Transform().IsDescendantOf(&childEntity->Transform());
 }
 
+bool HierarchyPanel::SelectionReparentIsLegal(eng::EntityId parent) const {
+    const EditorState& state = EditorState::Get();
+
+    // A drag carries the whole selection, so the target has to be legal for
+    // EVERY member of it. Allowing the drop because the grabbed row happens
+    // to be fine would quietly skip the others at the drop, which looks like
+    // the feature failing at random.
+    if (state.selection.empty()) {
+        return false;
+    }
+    for (const eng::EntityId id : state.selection) {
+        if (!ReparentIsLegal(id, parent)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void HierarchyPanel::DrawEntityDropTarget(eng::EntityId newParent) {
     if (!ImGui::BeginDragDropTarget()) {
         return;
@@ -177,7 +358,7 @@ void HierarchyPanel::DrawEntityDropTarget(eng::EntityId newParent) {
         eng::EntityId dragged{};
         std::memcpy(&dragged, peek->Data, sizeof(dragged));
 
-        if (ReparentIsLegal(dragged, newParent)) {
+        if (SelectionReparentIsLegal(newParent)) {
             if (ImGui::AcceptDragDropPayload(kPayloadEntity) != nullptr) {
                 RequestReparent(dragged, newParent);
             }
@@ -257,43 +438,82 @@ void HierarchyPanel::ApplyPendingReparent() {
     const PendingReparent request = m_pendingReparent;
     m_pendingReparent             = {};
 
-    eng::Scene&  scene = eng::Engine::Get().GetScene();
-    eng::Entity* child = scene.Get(request.child);
-    if (child == nullptr) {
-        // Destroyed between the drop and here. Nothing alarming - the id did
-        // its job, which was to make this a question rather than a crash.
-        return;
-    }
+    eng::Scene& scene = eng::Engine::Get().GetScene();
 
     eng::Transform2D* parentTransform = nullptr;
     if (!request.parent.IsNull()) {
         eng::Entity* parent = scene.Get(request.parent);
         if (parent == nullptr) {
             ENGINE_LOG_ERROR(eng::Channels::kEditor,
-                             "could not reparent '{}': what it was dropped on no "
-                             "longer exists", child->Name());
+                             "could not reparent: what it was dropped on no longer "
+                             "exists");
             return;
         }
         parentTransform = &parent->Transform();
     }
 
-    if (child->Transform().Parent() == parentTransform) {
-        return;   // dropped back where it already was
+    // EVERYTHING SELECTED MOVES, not just the row that was grabbed. The
+    // grabbed row is used only when it is somehow not in the selection,
+    // which the drag source makes sure cannot normally happen.
+    EditorState&               state = EditorState::Get();
+    std::vector<eng::EntityId> moving =
+        state.IsSelected(request.child) ? state.selection
+                                        : std::vector<eng::EntityId>{request.child};
+
+    int moved = 0;
+    for (const eng::EntityId id : moving) {
+        eng::Entity* child = scene.Get(id);
+        if (child == nullptr) {
+            continue;   // destroyed between the drop and here
+        }
+
+        // SKIP ANYTHING WHOSE ANCESTOR IS ALSO MOVING.
+        //
+        // Select a parent and its child, drag both onto somewhere new, and
+        // the child must stay where it is in the tree - under its parent,
+        // which is itself moving. Reparenting it separately would tear the
+        // branch apart and flatten it, which is the opposite of what
+        // dragging a branch somewhere means.
+        bool ancestorMoving = false;
+        for (const eng::EntityId other : moving) {
+            if (other == id) {
+                continue;
+            }
+            eng::Entity* otherEntity = scene.Get(other);
+            if (otherEntity != nullptr &&
+                child->Transform().IsDescendantOf(&otherEntity->Transform())) {
+                ancestorMoving = true;
+                break;
+            }
+        }
+        if (ancestorMoving) {
+            continue;
+        }
+
+        if (child->Transform().Parent() == parentTransform) {
+            continue;   // dropped back where it already was
+        }
+
+        // keepWorldTransform: TRUE. The entity stays exactly where it looks
+        // and its local numbers are recomputed to suit the new parent.
+        // Anything else makes things leap across the scene when you organise
+        // the tree, which is the opposite of what tidying up should do.
+        child->Transform().SetParent(parentTransform, true);
+        ++moved;
     }
 
-    // keepWorldTransform: TRUE. The entity stays exactly where it looks and
-    // its local numbers are recomputed to suit the new parent. Anything else
-    // makes things leap across the scene when you organise the tree, which
-    // is the opposite of what tidying up should do.
-    child->Transform().SetParent(parentTransform, true);
-    EditorState::Get().dirty = true;
+    if (moved == 0) {
+        return;
+    }
+    state.dirty = true;
 
     if (parentTransform == nullptr) {
-        ENGINE_LOG_INFO(eng::Channels::kEditor, "'{}' now has no parent",
-                        child->Name());
+        ENGINE_LOG_INFO(eng::Channels::kEditor, "{} entit{} now have no parent", moved,
+                        moved == 1 ? "y" : "ies");
     } else {
-        ENGINE_LOG_INFO(eng::Channels::kEditor, "'{}' is now a child of '{}'",
-                        child->Name(), scene.Get(request.parent)->Name());
+        ENGINE_LOG_INFO(eng::Channels::kEditor, "{} entit{} now a child of '{}'", moved,
+                        moved == 1 ? "y is" : "ies are",
+                        scene.Get(request.parent)->Name());
     }
 }
 
@@ -309,7 +529,7 @@ void HierarchyPanel::DrawContextMenu(eng::Entity& entity) {
     // ObjectMenu.h.
     if (ImGui::BeginMenu("New Object")) {
         if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
-            EditorState::Get().selected = created;
+            EditorState::Get().SelectOnly(created);
             EditorState::Get().dirty    = true;
         }
         ImGui::EndMenu();
@@ -334,6 +554,8 @@ void HierarchyPanel::DrawContextMenu(eng::Entity& entity) {
     // says what it would do and why it cannot right now.
     const bool hasParent = entity.Transform().Parent() != nullptr;
     if (ImGui::MenuItem("Unparent", nullptr, false, hasParent)) {
+        // Acts on the selection, like the drag does - RequestReparent is
+        // given the clicked row and ApplyPendingReparent widens it.
         RequestReparent(entity.Id(), eng::EntityId{});
     }
     if (!hasParent && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -350,20 +572,36 @@ void HierarchyPanel::DrawContextMenu(eng::Entity& entity) {
         } else {
             // Select the copy, because the next thing anybody does after
             // duplicating something is move it.
-            EditorState::Get().selected = copy;
+            EditorState::Get().SelectOnly(copy);
             EditorState::Get().dirty    = true;
         }
     }
 
     ImGui::Separator();
 
-    if (ImGui::MenuItem("Destroy")) {
+    // Says how many, so a right-click on one row of eight cannot destroy the
+    // other seven without warning.
+    EditorState&      state    = EditorState::Get();
+    const bool        bulk     = state.IsSelected(entity.Id()) && state.selection.size() > 1;
+    char              destroyLabel[64];
+    std::snprintf(destroyLabel, sizeof(destroyLabel), bulk ? "Destroy %zu entities"
+                                                           : "Destroy",
+                  state.selection.size());
+
+    if (ImGui::MenuItem(destroyLabel)) {
         // Through the DEFERRED QUEUE, not straight away. Deleting an entity
         // from inside a panel, mid-frame, is exactly the problem DeferredOps
         // exists to prevent - and the editor does not get an exemption from
         // the engine's own rules. The entity disappears at the end of the tick.
-        eng::DeferredOps::QueueDestroy(entity.Id());
-        EditorState::Get().dirty = true;
+        if (bulk) {
+            for (const eng::EntityId id : state.selection) {
+                eng::DeferredOps::QueueDestroy(id);
+            }
+            state.ClearSelection();
+        } else {
+            eng::DeferredOps::QueueDestroy(entity.Id());
+        }
+        state.dirty = true;
     }
     ImGui::EndPopup();
 }
@@ -431,11 +669,14 @@ void HierarchyPanel::DrawRenamePopup() {
 void HierarchyPanel::Draw() {
     eng::Scene& scene = eng::Engine::Get().GetScene();
 
+    // Rebuilt from nothing each frame - see HierarchyPanel::Row.
+    m_rows.clear();
+
     // Routed through the same CreateObject every menu uses, so "an empty
     // entity" means one thing in one place. See ObjectMenu.h.
     if (ImGui::Button("+ Create Entity")) {
         if (const eng::EntityId created = CreateObject("Empty"); !created.IsNull()) {
-            EditorState::Get().selected = created;
+            EditorState::Get().SelectOnly(created);
             EditorState::Get().dirty    = true;
         }
     }
@@ -445,7 +686,7 @@ void HierarchyPanel::Draw() {
     }
     if (ImGui::BeginPopup("newobject")) {
         if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
-            EditorState::Get().selected = created;
+            EditorState::Get().SelectOnly(created);
             EditorState::Get().dirty    = true;
         }
         ImGui::EndPopup();
@@ -472,9 +713,13 @@ void HierarchyPanel::Draw() {
             char label[192];
             std::snprintf(label, sizeof(label), "%s##%d_%d", entity.Name().c_str(),
                           entity.Id().index, entity.Id().generation);
-            if (ImGui::Selectable(label, EditorState::Get().selected == entity.Id())) {
-                EditorState::Get().selected = entity.Id();
+            if (ImGui::Selectable(label, EditorState::Get().IsSelected(entity.Id()))) {
+                HandleRowClick(entity.Id());
             }
+            // Recorded here too, so Shift and the marquee work the same way
+            // in a filtered list as they do in the tree.
+            m_rows.push_back(Row{entity.Id(), ImRect(ImGui::GetItemRectMin(),
+                                                     ImGui::GetItemRectMax())});
             DrawContextMenu(entity);
         });
     } else {
@@ -491,18 +736,31 @@ void HierarchyPanel::Draw() {
     //
     // Looked up from the ID every frame, which is the rule. A selection that
     // was destroyed simply comes back as nothing and no outline is drawn.
-    if (eng::Entity* selected = scene.Get(EditorState::Get().selected);
-        selected != nullptr) {
-        const eng::Vec2 position = selected->Transform().WorldPosition();
+    // EVERY selected entity gets an outline. The ACTIVE one gets its name as
+    // well, and a brighter colour - with eight things outlined in the same
+    // yellow there would be no way to tell which one the move gizmo belongs
+    // to, and eight name labels on top of each other would be unreadable.
+    for (const eng::EntityId id : EditorState::Get().selection) {
+        eng::Entity* entity = scene.Get(id);
+        if (entity == nullptr) {
+            continue;
+        }
+        const bool      active   = (id == EditorState::Get().selected);
+        const eng::Vec2 position = entity->Transform().WorldPosition();
+
         eng::Gizmos::Box(
             eng::AABB::FromCenterHalfExtents(position, eng::Vec2{22.0f, 22.0f}),
-            eng::Color::Yellow(), 0.0f, eng::GizmoSpace::World,
-            eng::GizmoCategory::Bounds);
+            active ? eng::Color::Yellow() : eng::Color::Cyan(), 0.0f,
+            eng::GizmoSpace::World, eng::GizmoCategory::Bounds);
+
+        if (!active) {
+            continue;
+        }
 
         // ABOVE the outline rather than beside it. Beside it is where the
         // Scene view puts its move handle, and a name label sitting on top of
         // the handle you are trying to grab makes a tool feel broken.
-        eng::Gizmos::Text(position + eng::Vec2{-20.0f, 34.0f}, selected->Name(),
+        eng::Gizmos::Text(position + eng::Vec2{-20.0f, 34.0f}, entity->Name(),
                           eng::Color::Yellow(), 0.0f, eng::GizmoSpace::World,
                           eng::GizmoCategory::Bounds);
     }
@@ -517,7 +775,7 @@ void HierarchyPanel::Draw() {
                                        ImGuiPopupFlags_MouseButtonRight |
                                            ImGuiPopupFlags_NoOpenOverItems)) {
         if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
-            EditorState::Get().selected = created;
+            EditorState::Get().SelectOnly(created);
             EditorState::Get().dirty    = true;
         }
         ImGui::EndPopup();
@@ -536,11 +794,26 @@ void HierarchyPanel::Draw() {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !io.WantTextInput) {
 
-        if (eng::Entity* selected = scene.Get(EditorState::Get().selected)) {
-            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
-                eng::DeferredOps::QueueDestroy(selected->Id());
-                EditorState::Get().dirty = true;
+        // DELETE ACTS ON THE WHOLE SELECTION. Taking a copy of the list
+        // first, because queueing a destroy does not remove anything from
+        // the selection but the prune at the top of the next frame will.
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
+            !EditorState::Get().selection.empty()) {
+
+            const std::vector<eng::EntityId> doomed = EditorState::Get().selection;
+            for (const eng::EntityId id : doomed) {
+                eng::DeferredOps::QueueDestroy(id);
             }
+            EditorState::Get().ClearSelection();
+            EditorState::Get().dirty = true;
+            ENGINE_LOG_INFO(eng::Channels::kEditor, "destroyed {} entit{}",
+                            doomed.size(), doomed.size() == 1 ? "y" : "ies");
+        }
+
+        if (eng::Entity* selected = scene.Get(EditorState::Get().selected)) {
+            // Rename stays SINGULAR. Renaming eight entities to one name is
+            // not a thing anybody wants, and the scene requires names to be
+            // unique anyway - it would fail for seven of them.
             if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
                 m_renameTarget    = selected->Id();
                 m_openRenamePopup = true;
@@ -551,6 +824,12 @@ void HierarchyPanel::Draw() {
     }
 
     DrawRenamePopup();
+
+    // The box, and then the Shift-range - both AFTER the rows, because both
+    // need m_rows to be complete. The marquee draws over the rows as well,
+    // which is where it belongs.
+    DrawMarquee();
+    ApplyPendingRange();
 
     // LAST, when the tree is finished and no node is still open. Changing
     // who is whose child rewrites the lists the tree above was walking, so

@@ -19,6 +19,25 @@
 //  IT IS AN EntityId, NEVER AN Entity*. A remembered pointer crashes the first
 //  time the selected entity is destroyed; an id is checked and comes back
 //  empty. See EntityId.h.
+//
+//  ==========================================================================
+//  THE SELECTION IS A LIST, with one member singled out as the ACTIVE one.
+//
+//  `selection` is everything chosen. `selected` is the active entity: the one
+//  the Inspector shows its components for, the one the move gizmo sits on,
+//  and the anchor a Shift-click measures its range from. It is always the
+//  last entity clicked, and it is always in `selection` unless nothing at all
+//  is selected.
+//
+//  Keeping `selected` as a plain field rather than "whatever is first in the
+//  list" is what let every panel that only cares about one entity carry on
+//  unchanged when multi-selection arrived. A panel that wants the whole set
+//  asks for `selection`; one that wants something to show asks for
+//  `selected`; neither has to know about the other.
+//
+//  IDS GO STALE. An entity can be destroyed while it is selected - the
+//  Hierarchy's own Destroy menu item does precisely that - so the list is
+//  pruned once a frame, before any panel reads it. See PruneSelection.
 // ============================================================================
 
 #include <engine/Engine.h>
@@ -36,8 +55,44 @@ namespace editor {
 // a tool with exactly one instance of everything, and threading a context
 // pointer through every panel would be ceremony with no payoff.
 struct EditorState {
+    // The ACTIVE entity - see the note at the top of this file. Null when
+    // nothing is selected.
     eng::EntityId selected{};
-    bool          showImGuiDemo = false;
+
+    // Everything selected, in the order it was chosen. Holds `selected` too,
+    // so a panel acting on "the selection" never has to remember to include
+    // the active one separately - a mistake that would show up as "delete
+    // removes all but one".
+    std::vector<eng::EntityId> selection;
+
+    bool showImGuiDemo = false;
+
+    // ---- working with the selection --------------------------------------
+    //
+    // These are the only places `selection` and `selected` are changed
+    // together, which is what keeps them from disagreeing.
+
+    bool IsSelected(eng::EntityId id) const;
+
+    // Replaces the selection with this one entity. The ordinary click.
+    void SelectOnly(eng::EntityId id);
+
+    // Adds without removing anything, and makes it active. Used by a Shift
+    // range and by a marquee.
+    void AddToSelection(eng::EntityId id);
+
+    // In or out, depending on where it is now. The Ctrl-click.
+    void ToggleSelection(eng::EntityId id);
+
+    void ClearSelection();
+
+    // Drops any id whose entity no longer exists, and keeps `selected`
+    // honest - if the active entity has gone, another member of the
+    // selection takes over, or it becomes null when the list empties.
+    //
+    // Called once per frame by EditorApp before the panels draw, so that no
+    // panel ever sees a selection containing something that is not there.
+    void PruneSelection();
 
     // Set by any panel that changes the scene, cleared when it is saved.
     // Purely a prompt for the user - nothing is blocked on it, because a tool

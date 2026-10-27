@@ -493,7 +493,7 @@ void InspectorPanel::Draw() {
             ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
                                "the selected entity no longer exists");
             if (ImGui::Button("Clear selection")) {
-                state.selected = eng::EntityId{};
+                state.ClearSelection();
             }
         } else {
             ImGui::TextDisabled("select an entity in the Hierarchy");
@@ -525,6 +525,44 @@ void InspectorPanel::Draw() {
     }
 
     const bool running = !eng::Engine::Get().Clock().IsPaused();
+
+    // ---- when several things are selected ---------------------------------
+    //
+    // The components below belong to the ACTIVE entity only, and saying so
+    // matters: editing a field here with eight entities selected changes one
+    // of them, and somebody who thought otherwise would not find out until
+    // much later. The alternative - editing every selected entity at once -
+    // is a real feature with real questions behind it (what happens when
+    // they disagree?) and is not something to do by accident.
+    if (state.selection.size() > 1) {
+        ImGui::TextColored(ImVec4(0.55f, 0.78f, 0.95f, 1.0f), "%zu entities selected",
+                           state.selection.size());
+
+        if (ImGui::Button("Destroy all")) {
+            for (const eng::EntityId id : state.selection) {
+                eng::DeferredOps::QueueDestroy(id);
+            }
+            state.ClearSelection();
+            state.dirty = true;
+        }
+
+        if (ImGui::TreeNode("Show the list")) {
+            for (const eng::EntityId id : state.selection) {
+                if (const eng::Entity* member = scene.Get(id)) {
+                    // Clicking one makes it the active entity, so the list
+                    // doubles as a way of stepping through the selection
+                    // without losing it.
+                    if (ImGui::Selectable(member->Name().c_str(), id == state.selected)) {
+                        state.selected = id;
+                    }
+                }
+            }
+            ImGui::TreePop();
+        }
+
+        ImGui::Separator();
+        ImGui::TextDisabled("below: the components of the active entity only");
+    }
 
     ImGui::Text("%s", entity->Name().c_str());
 

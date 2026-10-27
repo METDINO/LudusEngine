@@ -101,7 +101,7 @@ void EditorSession::Restore(ScenePanel* scenePanel) {
         if (!name.empty()) {
             const eng::EntityId found = eng::Engine::Get().GetScene().Find(name);
             if (!found.IsNull()) {
-                EditorState::Get().selected = found;
+                EditorState::Get().SelectOnly(found);
             }
         }
     }

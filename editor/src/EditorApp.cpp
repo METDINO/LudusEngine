@@ -8,6 +8,8 @@
 
 #include "EditorApp.h"
 
+#include <algorithm>
+
 #include "EditorGui.h"
 #include "ObjectMenu.h"
 #include "EditorSession.h"
@@ -31,6 +33,76 @@ namespace editor {
 EditorState& EditorState::Get() {
     static EditorState state;
     return state;
+}
+
+// ---------------------------------------------------------------------------
+//  The selection. See the note at the top of EditorApp.h.
+// ---------------------------------------------------------------------------
+
+bool EditorState::IsSelected(eng::EntityId id) const {
+    return std::find(selection.begin(), selection.end(), id) != selection.end();
+}
+
+void EditorState::SelectOnly(eng::EntityId id) {
+    selection.clear();
+    if (!id.IsNull()) {
+        selection.push_back(id);
+    }
+    selected = id;
+}
+
+void EditorState::AddToSelection(eng::EntityId id) {
+    if (id.IsNull()) {
+        return;
+    }
+    if (!IsSelected(id)) {
+        selection.push_back(id);
+    }
+    // Active even when it was already in the list, because a Shift-click
+    // onto something already selected still means "this is where I am now",
+    // and the next range should measure from here.
+    selected = id;
+}
+
+void EditorState::ToggleSelection(eng::EntityId id) {
+    if (id.IsNull()) {
+        return;
+    }
+    const auto it = std::find(selection.begin(), selection.end(), id);
+    if (it == selection.end()) {
+        selection.push_back(id);
+        selected = id;
+        return;
+    }
+
+    selection.erase(it);
+
+    // Ctrl-clicking the ACTIVE entity removes it, so something else has to
+    // become active - otherwise the Inspector would keep showing an entity
+    // that is no longer selected.
+    if (selected == id) {
+        selected = selection.empty() ? eng::EntityId{} : selection.back();
+    }
+}
+
+void EditorState::ClearSelection() {
+    selection.clear();
+    selected = eng::EntityId{};
+}
+
+void EditorState::PruneSelection() {
+    eng::Scene& scene = eng::Engine::Get().GetScene();
+
+    std::erase_if(selection, [&scene](eng::EntityId id) {
+        return scene.Get(id) == nullptr;
+    });
+
+    // The active entity has to be one of the survivors. Falling back to the
+    // last of them rather than to nothing keeps a Shift-range working after
+    // one of its members is deleted, which is the common case.
+    if (scene.Get(selected) == nullptr) {
+        selected = selection.empty() ? eng::EntityId{} : selection.back();
+    }
 }
 
 bool EditorApp::Init() {
@@ -174,7 +246,7 @@ void EditorApp::LoadScene(const std::string& virtualPath) {
     // that a DIFFERENT entity now occupies. The id would be recognised as out
     // of date - which is the mechanism working - but showing nothing at all is
     // better than showing a warning about a selection nobody made.
-    EditorState::Get().selected = eng::EntityId{};
+    EditorState::Get().ClearSelection();
 
     std::string error;
     if (!eng::Engine::Get().LoadScene(virtualPath, error)) {
@@ -257,7 +329,7 @@ void EditorApp::DrawMenuBar() {
 
         ImGui::BeginDisabled(!scene.IsLoaded());
         if (ImGui::MenuItem("Close Scene", nullptr, false, scene.IsLoaded())) {
-            EditorState::Get().selected = eng::EntityId{};
+            EditorState::Get().ClearSelection();
             scene.Unload();
         }
         ImGui::EndDisabled();
@@ -299,7 +371,7 @@ void EditorApp::DrawMenuBar() {
     // one list so the two cannot drift apart. See ObjectMenu.h.
     if (ImGui::BeginMenu("Objects")) {
         if (const eng::EntityId created = DrawObjectMenuItems(); !created.IsNull()) {
-            EditorState::Get().selected = created;
+            EditorState::Get().SelectOnly(created);
             EditorState::Get().dirty    = true;
         }
         ImGui::EndMenu();
@@ -342,6 +414,11 @@ void EditorApp::DrawMenuBar() {
 }
 
 void EditorApp::DrawPanels() {
+    // BEFORE ANY PANEL READS IT. An entity destroyed last frame leaves its id
+    // behind in the selection, and a panel that found nothing there would
+    // have to cope with a hole. One sweep here means none of them do.
+    EditorState::Get().PruneSelection();
+
     // The Begin/End pair lives HERE, not inside each panel's Draw. See the
     // note in Panel.h.
     for (const std::unique_ptr<Panel>& panel : m_panels) {

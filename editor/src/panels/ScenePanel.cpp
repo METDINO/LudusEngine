@@ -208,7 +208,7 @@ void ScenePanel::Draw() {
             if (!created.IsNull()) {
                 // Selected straight away, so the move handles are already on
                 // the thing that was just dropped.
-                EditorState::Get().selected = created;
+                EditorState::Get().SelectOnly(created);
             }
             std::snprintf(m_status, sizeof(m_status), "%s", message.c_str());
             ENGINE_LOG_INFO(eng::Channels::kEditor, "{}", message);
@@ -324,10 +324,16 @@ void ScenePanel::HandlePicking(const ImVec2& imageOrigin) {
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
         !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
 
-        eng::Scene& scene = eng::Engine::Get().GetScene();
-        if (eng::Entity* selected = scene.Get(EditorState::Get().selected)) {
-            eng::DeferredOps::QueueDestroy(selected->Id());
-            EditorState::Get().dirty = true;
+        // THE WHOLE SELECTION, matching the Hierarchy. Pressing Delete with
+        // eight things outlined and watching one of them go would be the
+        // kind of half-finished behaviour that makes a tool untrustworthy.
+        EditorState& state = EditorState::Get();
+        if (!state.selection.empty()) {
+            for (const eng::EntityId id : state.selection) {
+                eng::DeferredOps::QueueDestroy(id);
+            }
+            state.ClearSelection();
+            state.dirty = true;
         }
     }
 
@@ -361,9 +367,32 @@ void ScenePanel::HandlePicking(const ImVec2& imageOrigin) {
             }
         });
 
-        // Clicking empty space clears the selection, which is what every
-        // editor does and makes "deselect" discoverable without a shortcut.
-        EditorState::Get().selected = hit;
+        // THE SAME MODIFIERS THE HIERARCHY USES, so the two views do not
+        // need to be learned separately. There is no Shift-range here
+        // because "everything between" has no meaning in a 2D view - Shift
+        // adds, which is the next most useful thing.
+        EditorState&   state = EditorState::Get();
+        const ImGuiIO& io    = ImGui::GetIO();
+
+        if (hit.IsNull()) {
+            // Clicking empty space clears the selection, which is what every
+            // editor does and makes "deselect" discoverable without a
+            // shortcut - unless a modifier is held, where clearing what
+            // somebody is part way through building would be infuriating.
+            if (!io.KeyCtrl && !io.KeyShift) {
+                state.ClearSelection();
+            }
+        } else if (io.KeyCtrl) {
+            state.ToggleSelection(hit);
+        } else if (io.KeyShift) {
+            state.AddToSelection(hit);
+        } else if (!state.IsSelected(hit)) {
+            state.SelectOnly(hit);
+        } else {
+            // Already selected, so this is somebody aiming the gizmo at a
+            // different member of the set rather than starting again.
+            state.selected = hit;
+        }
     }
 }
 
@@ -449,10 +478,54 @@ void ScenePanel::UpdateGizmo(const ImVec2& imageOrigin) {
     // SetWorldPosition rather than SetLocalPosition. Dragging a child of a
     // rotated parent has to land where the cursor is, and working out what
     // local position that corresponds to is exactly what SetWorldPosition does.
-    if (!eng::ApproxEqual(next, world, 0.0001f)) {
-        selected->Transform().SetWorldPosition(next);
-        EditorState::Get().dirty = true;
+    if (eng::ApproxEqual(next, world, 0.0001f)) {
+        return;
     }
+
+    // ---- BULK MOVE ---------------------------------------------------------
+    //
+    // Everything selected moves BY THE SAME AMOUNT the active entity moved.
+    // By a delta rather than to a position, because moving them all to the
+    // cursor would pile them on top of each other and destroy the
+    // arrangement that is usually the reason for selecting them together.
+    const eng::Vec2 delta = next - world;
+    EditorState&    state = EditorState::Get();
+
+    selected->Transform().SetWorldPosition(next);
+
+    for (const eng::EntityId id : state.selection) {
+        if (id == state.selected) {
+            continue;   // the active one has already moved, above
+        }
+        eng::Entity* other = scene.Get(id);
+        if (other == nullptr) {
+            continue;
+        }
+
+        // SKIP ANYTHING WHOSE ANCESTOR IS ALSO MOVING, or it moves twice.
+        // A child follows its parent on its own - that is what a parent is -
+        // so adding the delta again would send it off at double speed. The
+        // same reasoning as the reparent in HierarchyPanel.cpp.
+        bool ancestorMoving = false;
+        for (const eng::EntityId candidate : state.selection) {
+            if (candidate == id) {
+                continue;
+            }
+            eng::Entity* ancestor = scene.Get(candidate);
+            if (ancestor != nullptr &&
+                other->Transform().IsDescendantOf(&ancestor->Transform())) {
+                ancestorMoving = true;
+                break;
+            }
+        }
+        if (ancestorMoving) {
+            continue;
+        }
+
+        other->Transform().SetWorldPosition(other->Transform().WorldPosition() + delta);
+    }
+
+    EditorState::Get().dirty = true;
 }
 
 void ScenePanel::DrawGizmo(const ImVec2& imageOrigin) {

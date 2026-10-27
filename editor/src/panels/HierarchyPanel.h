@@ -51,6 +51,11 @@
 
 #include <engine/scene/Entity.h>
 
+#include <imgui.h>
+#include <imgui_internal.h>   // ImRect, for remembering where each row is
+
+#include <vector>
+
 namespace editor {
 
 // The id ImGui matches a dragged ENTITY on, as opposed to a dragged file -
@@ -75,6 +80,52 @@ private:
     void DrawEntityDragSource(eng::Entity& entity);
     void DrawEntityDropTarget(eng::EntityId newParent);
 
+    // ---- selecting ---------------------------------------------------------
+    //
+    // Three gestures, the ones every list in every tool uses:
+    //
+    //   click         this one, and nothing else
+    //   Ctrl+click    add or remove this one, leaving the rest alone
+    //   Shift+click   everything from the active entity to this one
+    //   drag a box    everything the box touches
+    //
+    // The first three are decided here, per row. The box is further down.
+    void HandleRowClick(eng::EntityId id);
+
+    // Every row drawn this frame, top to bottom, with where it is on screen.
+    //
+    // REBUILT EVERY FRAME, and it has to be: the order depends on which
+    // branches are open, and a row's position moves the moment anything
+    // above it is expanded. A Shift-range means "between these two ROWS AS
+    // DISPLAYED", so there is nowhere else that answer could come from.
+    struct Row {
+        eng::EntityId id;
+        ImRect        rect;
+    };
+    std::vector<Row> m_rows;
+
+    // A Shift-click cannot be resolved where it happens. The other end of
+    // the range may be a row that has not been drawn yet this frame, so the
+    // range is worked out at the END of Draw, when m_rows is complete.
+    eng::EntityId m_pendingRangeTo{};
+    bool          m_hasPendingRange = false;
+    void          ApplyPendingRange();
+
+    // ---- the marquee (drag a box round some rows) --------------------------
+    //
+    // Started by pressing in EMPTY space rather than on a row, because
+    // pressing on a row already means "select it" and, if you move, "drag it
+    // somewhere else".
+    void DrawMarquee();
+
+    bool   m_marqueeActive = false;
+    ImVec2 m_marqueeStart{};
+
+    // What was selected when the box started, so that dragging it back over
+    // a row un-selects that row again rather than leaving it stuck on.
+    std::vector<eng::EntityId> m_marqueeBaseline;
+    bool                       m_marqueeAdds = false;   // Ctrl held at the start
+
     // The empty space under the tree, which only becomes a drop target while
     // an entity is actually being dragged. Dropping there means "no parent".
     void DrawRootDropZone();
@@ -83,6 +134,10 @@ private:
     // drop is accepted so an impossible target never lights up. A null
     // `parent` means the scene root, which is always allowed.
     bool ReparentIsLegal(eng::EntityId child, eng::EntityId parent) const;
+
+    // The same question for the WHOLE selection, which is what a drag
+    // actually carries. Legal only when it is legal for every member.
+    bool SelectionReparentIsLegal(eng::EntityId parent) const;
 
     void RequestReparent(eng::EntityId child, eng::EntityId parent);
     void ApplyPendingReparent();
