@@ -2,7 +2,7 @@
   "_comment": "The settings the engine reads when it starts. Change a value, save, and run again - no rebuilding. config/engine.example.json is the documented copy; this is the one that is actually read.",
 
   "window": {
-    "title": "Orion Engine",
+    "title": "Ludus Engine",
     "width": 1280,
     "height": 720
   },
