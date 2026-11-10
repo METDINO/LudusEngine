@@ -2,7 +2,7 @@
 #  2D Game Engine - the top-level build file.
 #
 #  CMake is the tool that turns this project into something your compiler can
-#  build, on Windows, macOS or Linux, without anybody having to maintain three
+#  build, on Windows, macOS or Linux, without anybody having to maintain three 
 #  separate project files. This file is where it starts.
 #
 #  Five things are built:

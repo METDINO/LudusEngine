@@ -39,8 +39,8 @@
         "MoveRight": ["Key.D", "Key.Right"],
         "MoveUp":    ["Key.W", "Key.Up"],
         "MoveDown":  ["Key.S", "Key.Down"],
-        "Jump":      ["Key.Space"],
-        "Fire":      ["Mouse.Left", "Key.Return"],
+        //"Jump":      ["Key.Space"],
+        "Fire":      [ "Key.Space", "Key.Return" ],
         "Interact":  ["Key.E", "Mouse.Left"],
         "Pause":     ["Key.Escape"],
         "Quit":      ["Key.Q"]
