@@ -194,9 +194,27 @@ std::size_t FindWord(const std::string& text, std::string_view needle,
 struct TypeSpelling {
     std::string_view spelling;
     ScriptFieldType  type;
+
+    // For a COMPONENT REFERENCE alias, the component it is a reference to.
+    //
+    // `Transform anchor;` has to narrow the Inspector's picker to entities
+    // carrying a TransformComponent, and nothing in the declaration says so -
+    // the alias hides it, which is the point of the alias. Empty for every
+    // other spelling, where a constraint either comes from a `// [Type]`
+    // marker or does not exist.
+    std::string_view required{};
 };
 
 constexpr std::array kTypeSpellings{
+    // ---- Unity's component names, which are REFERENCES here as they are
+    //      reference types in C#. See scene/ComponentRef.h.
+    // `Transform` is impossible as a field type - ScriptBehaviour::Transform()
+    // hides it - and Collider2D is a pointer to an abstract base that
+    // Entity::Find cannot look up. Engine.h argues both at length.
+    TypeSpelling{"TransformRef", ScriptFieldType::Entity, "TransformComponent"},
+    TypeSpelling{"SpriteRenderer", ScriptFieldType::Entity, "SpriteComponent"},
+    TypeSpelling{"Rigidbody2D", ScriptFieldType::Entity, "Rigidbody2DComponent"},
+
     TypeSpelling{"eng::EntityRef", ScriptFieldType::Entity},
     TypeSpelling{"EntityRef", ScriptFieldType::Entity},
     TypeSpelling{"eng::PrefabRef", ScriptFieldType::Prefab},
@@ -404,6 +422,54 @@ bool ReadDeclaration(const SourceLine& line, std::string_view commentAbove,
         }
     }
 
+    // ======================================================================
+    //  THE LONG SPELLING, eng::ComponentRef<eng::SpriteComponent>.
+    //
+    //  A PREFIX, so the table above cannot hold it: every entry there is an
+    //  exact word match. The component is lifted out of the template argument
+    //  textually and becomes the constraint, which is the one place in this
+    //  file where a type name is read rather than recognised.
+    //
+    //  NO REGISTRY IS CONSULTED AND NONE COULD BE - this parser is pure, and
+    //  the exposer is generated with no scene and no components registered.
+    //  ScriptFields::AddRef already warns about a constraint naming nothing,
+    //  in the one place that can actually answer the question.
+    //
+    //  The synthetic entry carries the WHOLE spelling, so the substr below
+    //  steps past `ComponentRef<...>` without this branch having to know how.
+    // ======================================================================
+    std::string  componentRefSpelling;
+    std::string  componentRefArgument;
+    TypeSpelling synthetic{};
+    if (matched == nullptr) {
+        for (const std::string_view prefix :
+             {std::string_view("eng::ComponentRef"), std::string_view("ComponentRef")}) {
+            if (!WordAt(code, 0, prefix)) {
+                continue;
+            }
+            const std::size_t open = code.find('<', prefix.size());
+            if (open == std::string::npos) {
+                break;
+            }
+            const std::size_t close = code.rfind('>');
+            if (close == std::string::npos || close < open) {
+                break;
+            }
+            componentRefArgument = TrimmedCopy(code.substr(open + 1, close - open - 1));
+            if (componentRefArgument.starts_with("eng::")) {
+                componentRefArgument.erase(0, 5);
+            }
+            if (componentRefArgument.empty()) {
+                break;
+            }
+            componentRefSpelling = code.substr(0, close + 1);
+            synthetic = TypeSpelling{componentRefSpelling, ScriptFieldType::Entity,
+                                     componentRefArgument};
+            matched   = &synthetic;
+            break;
+        }
+    }
+
     std::string afterType;
     if (matched != nullptr) {
         afterType = TrimmedCopy(code.substr(matched->spelling.size()));
@@ -418,6 +484,71 @@ bool ReadDeclaration(const SourceLine& line, std::string_view commentAbove,
         }
         const std::string typeText = code.substr(0, space);
         const std::string nameText = TrimmedCopy(code.substr(space));
+
+        // ================================================================
+        //  IS IT A POINTER? ASKED HERE, AND THAT PLACEMENT IS THE FIX.
+        //
+        //  The branch further down that says "it is a pointer, and the
+        //  Inspector edits values" reads `afterType`, which only exists once
+        //  the type has MATCHED one of kTypeSpellings. For a type this file
+        //  has never heard of - every component, and every class a project
+        //  writes - it was therefore unreachable, and a perfectly ordinary
+        //  `SpriteComponent* m_sprite` was told that its TYPE is not one the
+        //  Inspector can draw, followed by a list of scalars to pick from
+        //  instead. The answer was never the type; it is that an address has
+        //  nothing to put in a box.
+        //
+        //  `SpriteComponent *m_sprite` was worse still: the star lands on the
+        //  front of nameText, failed the IsIdentChar test that used to be
+        //  here, and the member was reported as NOTHING AT ALL. Three
+        //  spellings of one intent gave two near-identical messages and a
+        //  silence, and silence is the outcome this file works hardest to
+        //  avoid - see the note at the top of ScriptVars.h.
+        //
+        //  THE STAR BELONGS TO WHICHEVER SIDE IT WAS WRITTEN ON, so both are
+        //  checked and neither spelling is the special case.
+        //
+        //  AND A POINTER NEED NOT HAVE A STAR AT ALL. Engine.h hands scripts
+        //  Unity-shaped aliases that are already pointers - Rigidbody2D,
+        //  Collider2D, SpriteRenderer, GameObject - so
+        //  `Rigidbody2D m_body = nullptr;` is correct, and
+        //  assets/scripts/TilemapWalker.cpp writes exactly that. Initialising
+        //  from nullptr is the one thing a value cannot do, which tells the
+        //  two apart without this parser having to know what any of those
+        //  names mean. It stays pure: no registry, no engine state. See
+        //  ScriptVars.h.
+        // ================================================================
+        const bool starOnType =
+            !typeText.empty() && (typeText.back() == '*' || typeText.back() == '&');
+        const bool starOnName =
+            !nameText.empty() && (nameText.front() == '*' || nameText.front() == '&');
+        const std::size_t assign = nameText.find('=');
+        const bool fromNullptr =
+            assign != std::string::npos &&
+            TrimmedCopy(nameText.substr(assign + 1)).starts_with("nullptr");
+
+        if (starOnType || starOnName || fromNullptr) {
+            const char mark = starOnType ? typeText.back()
+                            : starOnName ? nameText.front()
+                                         : '*';
+            const std::string rest =
+                starOnName ? TrimmedCopy(nameText.substr(1)) : nameText;
+            const std::size_t end = rest.find_first_not_of(
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
+            outSkipped.name   = end == std::string::npos ? rest : rest.substr(0, end);
+            outSkipped.reason =
+                std::string("it is a ") + (mark == '*' ? "pointer" : "reference") +
+                ", and the Inspector edits values. For a component on ANOTHER "
+                "entity, that you drag an entity onto, the type to write is a "
+                "reference - TransformRef, SpriteRenderer, Rigidbody2D, or "
+                "eng::ComponentRef<TheComponent> for the rest; see "
+                "scene/ComponentRef.h. For one on THIS entity, which is what a "
+                "pointer beside a script usually is, ask with Find<T>() where you "
+                "use it";
+            outWasSkipped = !outSkipped.name.empty();
+            return false;
+        }
+
         if (typeText.empty() || nameText.empty() || !IsIdentChar(typeText.front()) ||
             !IsIdentChar(nameText.front())) {
             return false;
@@ -432,11 +563,25 @@ bool ReadDeclaration(const SourceLine& line, std::string_view commentAbove,
             return false;
         }
 
+        // ImageRef AND AnimationRef WERE MISSING FROM THIS LIST, which the
+        // table at the top of this file has handled all along and the
+        // Inspector draws. The omission was visible in one build's output:
+        // Bullet.cpp declares `ImageRef sprite;`, the very next line read
+        // "exposing sprite, ...", and this sentence denied the type worked.
+        //
+        // THE SECOND SENTENCE IS CONDITIONAL ON PURPOSE. This branch sees any
+        // type it does not know, which includes a project's own plain structs,
+        // so it must not assert that the member IS a component - only say what
+        // follows if it is. A component held by value is never right: the
+        // entity owns it, and a script asks for it where it is used.
         outSkipped.name   = declarator;
         outSkipped.reason = "its type '" + typeText +
                             "' is not one the Inspector can draw - it handles float, "
-                            "int, bool, std::string, Vec2, Color, EntityRef and "
-                            "PrefabRef";
+                            "int, bool, std::string, Vec2, Color, EntityRef, "
+                            "PrefabRef, ImageRef and AnimationRef. If '" + typeText +
+                            "' is a component, this declares one by value, which is "
+                            "not how a script holds one - ask for it with Find<eng::" +
+                            typeText + ">() where you use it";
         outWasSkipped = true;
         return false;
     }
@@ -577,6 +722,16 @@ bool ReadDeclaration(const SourceLine& line, std::string_view commentAbove,
     if (outVar.fieldType != ScriptFieldType::Entity &&
         outVar.fieldType != ScriptFieldType::String) {
         outVar.requiredType.clear();
+    }
+
+    // ---- a component reference constrains itself ------------------------
+    //
+    // AFTER the marker, so a hand-written `// [BoxColliderComponent]` still
+    // wins: somebody who wrote one meant it, and narrowing a Collider2D slot
+    // to one kind of collider is a reasonable thing to want. With no marker
+    // the type is the constraint, which is the whole argument for the type.
+    if (!matched->required.empty() && outVar.requiredType.empty()) {
+        outVar.requiredType = std::string(matched->required);
     }
     return true;
 }

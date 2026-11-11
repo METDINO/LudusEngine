@@ -341,6 +341,122 @@ TEST_CASE("a public pointer is reported whatever it is called") {
     REQUIRE(Skipped(info, "m_body") != nullptr);
 }
 
+TEST_CASE("a pointer to an undocumented type is reported as a pointer") {
+    // THE BUG THIS PINS. The "it is a pointer" message used to be reachable
+    // only for pointers to the eight types the Inspector draws, because it
+    // was asked after the type had already matched the table. A component
+    // pointer - the commonest pointer a script holds - fell through to the
+    // unknown-type branch and was told that its TYPE could not be drawn,
+    // with a list of scalars offered instead. The type was never the point.
+    //
+    // All three spellings mean one thing and must say one thing. The third
+    // used to be reported as nothing at all.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
+    SpriteComponent* starRight = nullptr;
+    SpriteComponent *starLeft = nullptr;
+    ColliderComponent& bound = *starRight;
+)CPP"));
+
+    for (const char* name : {"starRight", "starLeft"}) {
+        CHECK(Var(info, name) == nullptr);
+        REQUIRE(Skipped(info, name) != nullptr);
+        CHECK(Skipped(info, name)->reason.find("pointer") != std::string::npos);
+        CHECK(Skipped(info, name)->reason.find("not one the Inspector can draw") ==
+              std::string::npos);
+    }
+
+    REQUIRE(Skipped(info, "bound") != nullptr);
+    CHECK(Skipped(info, "bound")->reason.find("reference") != std::string::npos);
+}
+
+TEST_CASE("an unknown alias initialised from nullptr is still a pointer") {
+    // THIS USED TO SAY `Rigidbody2D m_body = nullptr;`, and that line now means
+    // something else: Rigidbody2D is a component REFERENCE and the table
+    // recognises it, so it is a field rather than a skip - see the case below.
+    //
+    // The rule is still needed, because a project may typedef a pointer of its
+    // own and this parser cannot know the name. `= nullptr` is what tells it
+    // apart from a value, a value being the one thing that cannot be built
+    // from one.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    SomeHandleOfMyOwn m_thing = nullptr;"));
+
+    CHECK(Var(info, "m_thing") == nullptr);
+    REQUIRE(Skipped(info, "m_thing") != nullptr);
+    CHECK(Skipped(info, "m_thing")->reason.find("pointer") != std::string::npos);
+    CHECK(Skipped(info, "m_thing")->reason.find("by value") == std::string::npos);
+}
+
+TEST_CASE("a component reference is a field, and constrains itself") {
+    // The whole point of ComponentRef: the component it is a reference TO
+    // rides the C++ type, so the constraint the Inspector filters its picker
+    // by cannot drift away from the thing the script actually calls. Nobody
+    // writes a `// [SpriteComponent]` marker and nobody can get it wrong.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
+    TransformRef   anchor;
+    SpriteRenderer flash;
+    Rigidbody2D    pushed;
+    eng::ComponentRef<eng::TilemapComponent> ground;
+    ComponentRef<BoxColliderComponent> area;
+)CPP"));
+
+    struct Expected {
+        const char* name;
+        const char* required;
+    };
+    for (const Expected e : {Expected{"anchor", "TransformComponent"},
+                             Expected{"flash", "SpriteComponent"},
+                             Expected{"pushed", "Rigidbody2DComponent"},
+                             Expected{"ground", "TilemapComponent"},
+                             Expected{"area", "BoxColliderComponent"}}) {
+        REQUIRE(Var(info, e.name) != nullptr);
+        CHECK(Var(info, e.name)->fieldType == ScriptFieldType::Entity);
+        CHECK(Var(info, e.name)->requiredType == e.required);
+    }
+
+    // Every one of them is a variable, so nothing was skipped and nothing was
+    // reported - which is the difference the owner asked for.
+    CHECK(info.skipped.empty());
+}
+
+TEST_CASE("a marker still beats the reference type's own constraint") {
+    // Narrowing a Rigidbody2D slot would be odd, but narrowing a collider one
+    // is not, and somebody who wrote a marker meant it. The type is the
+    // DEFAULT constraint, not an override of what was asked for.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    Rigidbody2D pushed;   // [BoxColliderComponent]"));
+
+    REQUIRE(Var(info, "pushed") != nullptr);
+    CHECK(Var(info, "pushed")->requiredType == "BoxColliderComponent");
+}
+
+TEST_CASE("a reference to something that is not a component is left alone") {
+    // ComponentRef<T> static_asserts on T, but that is a COMPILER's job and
+    // this parser never sees a type. An empty argument is not a declaration it
+    // can make sense of, so it falls through rather than inventing a field.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    ComponentRef<> nothing;"));
+    CHECK(Var(info, "nothing") == nullptr);
+}
+
+TEST_CASE("a component held by value says so, and says what to do") {
+    // The declaration that started this: four compiler errors, all of them on
+    // the three lines that USED the member and none on the line that declared
+    // it. This is the one place that sees the declaration, so it is the only
+    // place that can name it.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    SpriteComponent m_sprite;"));
+
+    CHECK(Var(info, "m_sprite") == nullptr);
+    REQUIRE(Skipped(info, "m_sprite") != nullptr);
+    const std::string& why = Skipped(info, "m_sprite")->reason;
+    CHECK(why.find("declares one by value") != std::string::npos);
+    CHECK(why.find("Find<eng::SpriteComponent>()") != std::string::npos);
+
+    // And the list it offers instead is the list the table really handles.
+    CHECK(why.find("ImageRef") != std::string::npos);
+    CHECK(why.find("AnimationRef") != std::string::npos);
+}
+
 TEST_CASE("a name that merely contains m_ is not hidden") {
     const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
     float warm_up = 1.0f;
