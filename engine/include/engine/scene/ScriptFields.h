@@ -110,8 +110,10 @@
 #include <engine/scene/AnimationRef.h>
 #include <engine/scene/ComponentRef.h>
 #include <engine/scene/EntityRef.h>
+#include <engine/scene/GameObjectRef.h>
 #include <engine/scene/ImageRef.h>
 #include <engine/scene/PrefabRef.h>
+#include <engine/scene/ScriptRef.h>
 
 #include <string>
 #include <string_view>
@@ -207,6 +209,29 @@ enum class ScriptFieldType {
     //
     // APPENDED, for the reason in the note above this enum.
     Image,
+
+    // EITHER OF THE TWO ABOVE IT, chosen by what you drag onto it.
+    //
+    // It is an eng::GameObjectRef, and it is the one field type that does not
+    // decide in C++ what it is pointing at: a thing already in the scene, or
+    // a .oprefab on disk. The Inspector draws one slot and accepts a drag
+    // from the Hierarchy OR from the Assets panel.
+    //
+    // WHY IT IS NOT JUST Entity-OR-Prefab AT THE CALL SITE. The distinction
+    // between "a template" and "a thing that exists" is real and the engine
+    // keeps both types - but it is a fact about STORAGE, and it was leaking
+    // into the script. "What to spawn when the player presses fire" had to
+    // commit in code to which of the two it would be, so changing your mind
+    // meant editing the script rather than dragging something different onto
+    // it. The Inspector is where that decision belongs.
+    //
+    // THIS IS WHAT Unity's `public GameObject` IS, and ScriptBehaviour's
+    // Instantiate takes one: a prefab is built from its file, a scene object
+    // is cloned. See scene/GameObjectRef.h for what a prefab one resolves to
+    // and why that is nothing.
+    //
+    // APPENDED, for the reason in the note above this enum.
+    GameObject,
 };
 
 // "float", "colour" - for error messages and the Inspector's tooltips.
@@ -339,18 +364,60 @@ struct ScriptField {
     //
     // A NAME AND NOT A TYPE, which is what lets one mechanism serve both a
     // component the engine ships and a script somebody wrote this afternoon.
-    // Both are registered under a name and neither can be named in a header
-    // that every script includes - a script class lives in an anonymous
-    // namespace, so no other file can even mention it.
     //
-    // It is advice to the Inspector, not a rule the engine keeps: a reference
-    // can be pointed at an entity that does not satisfy it, and the Inspector
-    // says so rather than refusing. A level in the middle of being built is
-    // allowed to be wrong.
+    // AND THE REASON IS THE EDITOR, not anything about the script. This
+    // process was compiled before that script existed, so there is no C++ type
+    // called Bullet to name HERE however the game spells it - and the
+    // constraint has to survive into the scene file and back out into a picker
+    // either way. A script CAN now be named from another script, by putting
+    // its class in a header both include; see scene/ScriptRef.h. That changes
+    // what a script author writes and nothing about what travels.
+    //
+    // IT IS NOT A RULE THE ENGINE KEEPS. Nothing here stops a reference being
+    // pointed at an entity that does not satisfy it - a hand-edited scene
+    // file may name one, and a component may be taken off an entity that was
+    // already pointed at. A level in the middle of being built is allowed to
+    // be wrong, and the Inspector says so rather than quietly correcting it.
+    //
+    // WHAT THE INSPECTOR DOES WITH IT is narrow the picker and REFUSE A DROP
+    // that cannot satisfy it, saying what is missing while the cursor is over
+    // the slot. That is a gesture failing to land, not the engine enforcing
+    // anything: a reference is typed, so an entity dragged onto a Door slot
+    // that has no Door on it is a drop that missed rather than a level being
+    // built. Taking it meant clearing the slot by hand before trying again.
     //
     // NOT called `requires`, which has been a C++ KEYWORD since C++20 - the
     // same keyword ScriptHooks.h uses to ask whether a script has an OnUpdate.
     std::string requiredType;
+
+    // ======================================================================
+    //  ONE ELEMENT OF AN ARRAY, and which one.
+    //
+    //  `std::string walkAnimations[4]` is exposed as four ordinary variables
+    //  called walkAnimations[0] to walkAnimations[3] - see the note on the
+    //  loop in tools/ScriptVars.cpp - and that stays exactly true: every one
+    //  of them has its own saved value, its own prefab override and its own
+    //  undo entry, and nothing downstream had to learn about arrays for any
+    //  of that to work.
+    //
+    //  WHAT THE FLATTENING COST WAS THE INSPECTOR. Four rows called
+    //  walkAnimations[0..3] are four unrelated variables as far as the panel
+    //  is concerned, so a sixteen-long array was sixteen rows that could not
+    //  be folded away and whose shared name was repeated sixteen times. The
+    //  panel can only group them if it knows they belong together.
+    //
+    //  SO THE NAME IS READ ONCE, HERE, rather than parsed again by every
+    //  reader - which is the same argument AssetFieldKind makes for living in
+    //  the engine. A C++ identifier cannot contain a bracket, so a name that
+    //  ends in "[<digits>]" came from the array loop or from somebody writing
+    //  that shape into Var() by hand, and both mean the same thing.
+    //
+    //  EMPTY AND -1 for an ordinary variable, which is almost all of them.
+    //  `arrayIndex >= 0` and `!arrayName.empty()` are the same question; the
+    //  index is what the Inspector labels the row with.
+    // ======================================================================
+    std::string arrayName;
+    int         arrayIndex = -1;
 
     // ---- typed access ----------------------------------------------------
     //
@@ -369,8 +436,9 @@ struct ScriptField {
 
     // Longer than its neighbours, so these two break the column rather than
     // widening the eight above that were fine.
-    AnimationRef* AsAnimationRef() const;
-    ImageRef*     AsImageRef() const;
+    AnimationRef*  AsAnimationRef() const;
+    ImageRef*      AsImageRef() const;
+    GameObjectRef* AsGameObjectRef() const;
 };
 
 namespace fields {
@@ -415,6 +483,10 @@ template <> struct Traits<PrefabRef> {
     static constexpr bool            known = true;
     static constexpr ScriptFieldType type  = ScriptFieldType::Prefab;
 };
+template <> struct Traits<GameObjectRef> {
+    static constexpr bool            known = true;
+    static constexpr ScriptFieldType type  = ScriptFieldType::GameObject;
+};
 // ONE SPECIALIZATION FOR EVERY COMPONENT TYPE, which is why it is partial.
 //
 // A ComponentRef IS an EntityRef - it derives from one, adds no members and
@@ -425,6 +497,23 @@ template <> struct Traits<PrefabRef> {
 // holds one number per KIND; it travels in ScriptField::requiredType, which
 // the generated exposer fills in from the template argument.
 template <class T> struct Traits<ComponentRef<T>> {
+    static constexpr bool            known = true;
+    static constexpr ScriptFieldType type  = ScriptFieldType::Entity;
+};
+// AND ONE FOR EVERY SCRIPT CLASS, for all the same reasons: a ScriptRef is an
+// EntityRef too, with no members and no vtable of its own, so the base is at
+// offset 0 and AsEntityRef's unchecked cast is exactly as valid.
+//
+// WITHOUT THIS THE VARIABLE SIMPLY DOES NOT APPEAR, and it is worth being
+// precise about why, because the reason is NOT that something fails to
+// compile. ScriptFields::Ref is not a template and asks no questions - it
+// binds an EntityRef& and the derived-to-base conversion satisfies it - so a
+// HAND-WRITTEN OnExpose calling fields.Ref(...) works with no specialization
+// at all. The only thing standing between a correct declaration and a silent
+// omission is the nested `Traits<...>::known` requirement in the exposer the
+// editor generates; see tools/ScriptVars.cpp. So the failure mode is
+// "it works when I write OnExpose myself and vanishes when I do not".
+template <class T> struct Traits<ScriptRef<T>> {
     static constexpr bool            known = true;
     static constexpr ScriptFieldType type  = ScriptFieldType::Entity;
 };
@@ -483,8 +572,9 @@ public:
                       "std::string, eng::Vec2, eng::Color, eng::EntityRef, "
                       "eng::PrefabRef, eng::AnimationRef, eng::ImageRef, or a "
                       "reference to a component - eng::ComponentRef<T>, which is "
-                      "what Transform, SpriteRenderer, Rigidbody2D and Collider2D "
-                      "are - or "
+                      "what TransformRef, SpriteRenderer and Rigidbody2D are - or "
+                      "a reference to another SCRIPT, which is written as that "
+                      "script's own bare name - or "
                       "a FIXED-SIZE ARRAY of one of those, "
                       "which the exposer turns into one row per element. Those are "
                       "the ones the Inspector can draw and the scene file can "
@@ -632,6 +722,22 @@ public:
 
     // Null when no variable has that name.
     const ScriptField* Find(std::string_view name) const;
+
+    // ----------------------------------------------------------------------
+    //  HOW LONG THE ARRAY CALLED `arrayName` IS - its declared length, which
+    //  is the number of elements the script exposed and nothing to do with
+    //  how many of them are filled in.
+    //
+    //  COUNTED RATHER THAN STORED, and that is deliberate: the elements are
+    //  the only record that the array exists, so a count kept beside them
+    //  would be a second answer that could disagree with the first. It is a
+    //  walk of a list that is a dozen entries long on a busy script.
+    //
+    //  0 when nothing by that name was exposed, which is also the answer for
+    //  an ordinary variable - a non-array has no length, rather than a length
+    //  of one.
+    // ----------------------------------------------------------------------
+    std::size_t ArrayLength(std::string_view arrayName) const;
 
     void Clear() { m_fields.clear(); }
 

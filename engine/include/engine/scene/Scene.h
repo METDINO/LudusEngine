@@ -210,7 +210,23 @@ public:
     bool LoadFromString(std::string_view text, std::string& outError);
 
     // Destroys every entity, which releases every texture they were using.
-    void Unload();
+    // ======================================================================
+    //  WHAT AN UNLOAD IS ALLOWED TO LEAVE BEHIND.
+    //
+    //  Everything, by default - which is what every caller written before
+    //  persistence existed meant, and is why the parameter has a default
+    //  rather than every call site being revisited.
+    //
+    //  Only Scene::Load asks for KeepPersistent, because only a scene CHANGE
+    //  is the thing DontDestroyOnLoad is about. See SetPersistent for the
+    //  whole list and why each one is what it is.
+    // ======================================================================
+    enum class UnloadScope {
+        Everything,
+        KeepPersistent,
+    };
+
+    void Unload(UnloadScope scope = UnloadScope::Everything);
 
     // ---- starting a scene from nothing ------------------------------------
     //
@@ -234,6 +250,24 @@ public:
     // The file this scene was last loaded from. Deliberately survives Unload,
     // because "reload what I just unloaded" needs it.
     const std::string& SourcePath() const { return m_sourcePath; }
+
+    // ======================================================================
+    //  THE SAME SCENE, AT A DIFFERENT PATH.
+    //
+    //  FOR A RENAME OR A MOVE OF THE OPEN SCENE'S OWN FILE, and for nothing
+    //  else. The editor renames the file on disk; without this the scene in
+    //  memory goes on believing it came from the old name, so the next Ctrl+S
+    //  writes the file straight back under it - leaving two copies of the
+    //  level and a rename that appears to have undone itself.
+    //
+    //  IT DOES NOT LOAD, SAVE OR TOUCH THE CONTENTS. The entities are already
+    //  correct; only the name of the file they will be written to is wrong.
+    //  That is why this is a setter rather than a reload: a reload would throw
+    //  away unsaved work to fix a filename.
+    // ======================================================================
+    void SetSourcePath(std::string_view virtualPath) {
+        m_sourcePath = std::string(virtualPath);
+    }
 
     bool IsLoaded() const { return m_liveCount > 0; }
 
@@ -298,6 +332,14 @@ public:
     // Children are NOT copied; silently duplicating a whole subtree is rarely
     // what was meant.
     EntityId DuplicateEntity(EntityId id, std::string& outError);
+
+    // The same, placed - which is what Unity's Instantiate(someSceneObject,
+    // position, rotation) is. It exists so that a script cloning a scene
+    // object can place the copy through the SAME SpawnOptions that placing a
+    // prefab uses: two ways of saying "put it here" would eventually
+    // disagree about what a parent or a local position means.
+    EntityId DuplicateEntity(EntityId id, const SpawnOptions& placement,
+                             std::string& outError);
 
     // Adds a number to the end of a name until it is free. Clicking "Create
     // Entity" fifty times should not require inventing fifty names.
@@ -387,11 +429,14 @@ public:
     // FindScriptIn<T> / FindScriptNamedIn from scene/ScriptComponent.h, which
     // ask each behaviour what it really is.
     template <class T> Entity* FindFirstWith(bool skipPendingDestroy = true);
-    template <class T> T*      FindFirstComponent(bool skipPendingDestroy = true);
+    template <class T>
+    typename FindTargetOf<T>::type* FindFirstComponent(
+        bool skipPendingDestroy = true);
 
     template <class T>
-    std::size_t ForEachWith(const std::function<void(Entity&, T&)>& fn,
-                            bool skipPendingDestroy = true);
+    std::size_t ForEachWith(
+        const std::function<void(Entity&, typename FindTargetOf<T>::type&)>& fn,
+        bool skipPendingDestroy = true);
     template <class T>
     std::size_t CountWith(bool skipPendingDestroy = true);
 
@@ -452,6 +497,73 @@ public:
     // Which entity of the asset this is. 0 when it belongs to no instance.
     int PrefabLocalIdOf(EntityId id) const;
 
+    // ---- entities this scene file does not describe -----------------------
+    //
+    // A DERIVED ENTITY IS BUILT FROM SOMETHING ELSE, and the save skips it at
+    // the same point and for the same reason it skips a prefab instance's
+    // members: writing it out would freeze a copy of whatever built it into
+    // this scene file, so editing that thing would stop reaching the scenes
+    // using it, and loading would produce the entity twice over.
+    //
+    // WHAT BUILDS THEM TODAY: a tilemap, for every painted cell whose tile
+    // carries components - see TilemapComponent::SyncTileObjects. There is no
+    // record to write for one, because the map's cells and the tile's .otile
+    // already say everything there is to say about it.
+    //
+    // UNLIKE A PREFAB INSTANCE there are no overrides, because there is
+    // nothing to override: a tile is a kind of thing and every cell painted
+    // with it is the same thing. Something that needs to differ per placement
+    // is an entity, or a prefab, and not a tile.
+    //
+    // The flag lives in the SLOT rather than in the Entity, for exactly the
+    // reason the prefab link does: it is something the scene knows about an
+    // entity rather than something the entity is, and the slot is cleared by
+    // the same code that frees it - so a reused slot cannot inherit it.
+    void SetDerived(EntityId id, bool derived);
+    bool IsDerived(EntityId id) const;
+
+    // ======================================================================
+    //  SURVIVES A SCENE CHANGE. Unity's DontDestroyOnLoad.
+    //
+    //  The entity, its components, its scripts WITH THEIR RUNNING STATE, and
+    //  its children all stay exactly as they are while the scene around them
+    //  is replaced. Not re-created from a file afterwards - the same objects,
+    //  at the same addresses, with the same EntityId. That is the whole point:
+    //  a behaviour that has been counting something goes on counting.
+    //
+    //  ==========================================================================
+    //  ONLY A SCENE CHANGE CARRIES THEM, which is what the name says and is a
+    //  narrower promise than it first looks. Unload() destroys everything by
+    //  default; it is Load() that asks for them to be kept, and nothing else
+    //  does:
+    //
+    //    Load(path)        KEEPS them. This is a scene change - GoToScene,
+    //                      RequestScene, the thing the feature is for.
+    //    LoadFromString    destroys them. It is how play mode restores its
+    //                      snapshot, and a Stop that left objects behind would
+    //                      leave the editor holding something the scene file
+    //                      does not describe.
+    //    StartNewScene     destroys them. "New scene" means nothing carried.
+    //    ~Scene, Shutdown  destroy them. Nothing survives the process.
+    //
+    //  ==========================================================================
+    //  CHILDREN COME TOO, and a persistent child of a non-persistent parent is
+    //  DETACHED rather than orphaned - see the note in Unload. Unity solves
+    //  the same problem by only honouring this on a root; detaching says the
+    //  same thing out loud instead of ignoring the call.
+    //
+    //  ==========================================================================
+    //  AND THEY ARE NOT SAVED, for the reason a derived entity is not: an
+    //  entity that came from scene A is not part of scene B's description, and
+    //  writing it there would make a copy appear every time that scene loaded.
+    // ==========================================================================
+    void SetPersistent(EntityId id, bool persistent);
+    bool IsPersistent(EntityId id) const;
+
+    // How many entities are currently marked. For tests, and for anything
+    // that wants to report it rather than leaving survivors looking ordinary.
+    std::size_t PersistentCount() const;
+
     // The root of the instance this entity belongs to, or a null id.
     //
     // FOUND BY WALKING UP rather than by asking the asset which id is the
@@ -507,11 +619,39 @@ public:
     Vec2  InitialCameraPosition() const { return m_cameraPosition; }
     float InitialCameraZoom() const     { return m_cameraZoom; }
 
+    // ======================================================================
+    //  HOW MANY WORLD UNITS TALL THE SHOT IS, or ZERO when the file did not
+    //  say - which is every scene written before this existed.
+    //
+    //  ZERO AS "NOT SAID" rather than a second boolean beside it, because the
+    //  two can then never disagree: a frame height of zero is not a shot, so
+    //  there is no state in which the flag says yes and the number says
+    //  nothing. See render/Camera.h for what the two framings mean.
+    // ======================================================================
+    float InitialCameraFrameHeight() const { return m_cameraFrameHeight; }
+
     // Pushed back in before saving, so framing a shot in the editor and
     // pressing save keeps the framing.
+    //
+    // THE TWO SETTERS ARE EXCLUSIVE, and that is the point: a scene is framed
+    // one way or the other, and whichever one is called is the one the file
+    // gets. Writing both keys would make the file ambiguous and make a
+    // round trip depend on which the reader preferred.
     void SetCameraState(Vec2 position, float zoom) {
+        m_cameraPosition    = position;
+        m_cameraZoom        = zoom;
+        m_cameraFrameHeight = 0.0f;
+    }
+
+    void SetCameraFrameHeight(Vec2 position, float frameHeight, float effectiveZoom) {
         m_cameraPosition = position;
-        m_cameraZoom     = zoom;
+        m_cameraFrameHeight = frameHeight;
+
+        // KEPT IN STEP ANYWAY, even though it is not written to the file. The
+        // engine reads InitialCameraZoom when it has no frame height, and a
+        // stale value here would be the one the editor handed back after a
+        // Play session that never touched the camera.
+        m_cameraZoom = effectiveZoom;
     }
 
     // The scene the engine is currently running.
@@ -553,7 +693,33 @@ private:
         // cannot inherit the last occupant's instance.
         PrefabInstance* prefab        = nullptr;
         int             prefabLocalId = 0;
+
+        // Built from something else and not written when the scene is saved.
+        // See SetDerived above.
+        bool derived = false;
+
+        // Survives a scene CHANGE. See Scene::SetPersistent.
+        bool persistent = false;
     };
+
+    // ======================================================================
+    //  GIVES A SURVIVOR ITS NAME BACK, once the incoming scene is built.
+    //
+    //  During the build the newcomer owns the name, because a scene file
+    //  resolves its own parents by name and a survivor holding "Manager"
+    //  throughout would have the new scene's child of Manager parented to the
+    //  SURVIVOR - quietly rewriting the hierarchy of the scene being loaded.
+    //
+    //  Afterwards the survivor takes it, because the singleton check that
+    //  every Unity user writes looks for an existing one BY NAME, and a
+    //  survivor nothing can find is a survivor nothing can stand down to.
+    // ======================================================================
+    void ReclaimCarriedNames();
+
+    // The names survivors held when the last scene was unloaded, waiting for
+    // the build to finish. Empty except between an Unload(KeepPersistent) and
+    // the ReclaimCarriedNames that follows it.
+    std::vector<std::pair<std::string, EntityId>> m_carriedNames;
 
     void ResolveParents(const Json& entitiesArray);
 
@@ -629,6 +795,9 @@ private:
     std::string m_sourcePath;
     Vec2        m_cameraPosition{0.0f, 0.0f};
     float       m_cameraZoom = 1.0f;
+
+    // 0 means "the file framed by zoom" - see InitialCameraFrameHeight.
+    float       m_cameraFrameHeight = 0.0f;
 };
 
 // ===========================================================================
@@ -661,20 +830,22 @@ Entity* Scene::FindFirstWith(bool skipPendingDestroy) {
 }
 
 template <class T>
-T* Scene::FindFirstComponent(bool skipPendingDestroy) {
+typename FindTargetOf<T>::type* Scene::FindFirstComponent(
+    bool skipPendingDestroy) {
     Entity* owner = FindFirstWith<T>(skipPendingDestroy);
     return owner != nullptr ? owner->Find<T>() : nullptr;
 }
 
 template <class T>
-std::size_t Scene::ForEachWith(const std::function<void(Entity&, T&)>& fn,
-                               bool skipPendingDestroy) {
+std::size_t Scene::ForEachWith(
+    const std::function<void(Entity&, typename FindTargetOf<T>::type&)>& fn,
+    bool skipPendingDestroy) {
     std::size_t seen = 0;
     ForEach([&](Entity& entity) {
         if (skipPendingDestroy && DeferredOps::IsPendingDestroy(entity.Id())) {
             return;
         }
-        if (T* component = entity.Find<T>(); component != nullptr) {
+        if (auto* component = entity.Find<T>(); component != nullptr) {
             ++seen;
             fn(entity, *component);
         }
@@ -706,16 +877,21 @@ std::size_t Scene::CountWith(bool skipPendingDestroy) {
 // ---------------------------------------------------------------------------
 
 template <typename T>
-std::size_t Entity::FindAll(std::vector<T*>& into) {
+std::size_t Entity::FindAll(std::vector<typename FindTargetOf<T>::type*>& into) {
+    // UNWRAPPED ONCE, HERE. Inside a script a bare component name is a
+    // ComponentRef, and the vector a caller can actually declare holds the
+    // COMPONENT - a std::vector<ComponentRef<SpriteComponent>*> is not
+    // something anybody would write. See FindTargetOf in this header.
+    using Target = typename FindTargetOf<T>::type;
     into.clear();
-    const std::string_view wanted = T::kTypeName;
+    const std::string_view wanted = Target::kTypeName;
     for (std::size_t i = 0; i < ComponentCount(); ++i) {
         Component* component = ComponentAt(i);
         // Compared as TEXT rather than by pointer. The two string literals
         // live in engine.dll and in the compiled script that is asking, and
         // nothing promises the linker folded them to one address.
         if (component != nullptr && std::string_view(component->TypeName()) == wanted) {
-            into.push_back(static_cast<T*>(component));
+            into.push_back(static_cast<Target*>(component));
         }
     }
     return into.size();
@@ -723,9 +899,9 @@ std::size_t Entity::FindAll(std::vector<T*>& into) {
 
 
 template <typename T>
-T* Entity::FindInChildren(bool includeSelf) {
+typename FindTargetOf<T>::type* Entity::FindInChildren(bool includeSelf) {
     if (includeSelf) {
-        if (T* mine = Find<T>(); mine != nullptr) {
+        if (auto* mine = Find<T>(); mine != nullptr) {
             return mine;
         }
     }
@@ -755,7 +931,7 @@ T* Entity::FindInChildren(bool includeSelf) {
             continue;
         }
         if (Entity* owner = scene->EntityOf(*node); owner != nullptr) {
-            if (T* found = owner->Find<T>(); found != nullptr) {
+            if (auto* found = owner->Find<T>(); found != nullptr) {
                 return found;
             }
         }
@@ -765,9 +941,9 @@ T* Entity::FindInChildren(bool includeSelf) {
 }
 
 template <typename T>
-T* Entity::FindInParents(bool includeSelf) {
+typename FindTargetOf<T>::type* Entity::FindInParents(bool includeSelf) {
     if (includeSelf) {
-        if (T* mine = Find<T>(); mine != nullptr) {
+        if (auto* mine = Find<T>(); mine != nullptr) {
             return mine;
         }
     }
@@ -780,7 +956,7 @@ T* Entity::FindInParents(bool includeSelf) {
     for (const Transform2D* node = Transform().Parent(); node != nullptr;
          node                    = node->Parent()) {
         if (Entity* owner = scene->EntityOf(*node); owner != nullptr) {
-            if (T* found = owner->Find<T>(); found != nullptr) {
+            if (auto* found = owner->Find<T>(); found != nullptr) {
                 return found;
             }
         }
@@ -789,12 +965,14 @@ T* Entity::FindInParents(bool includeSelf) {
 }
 
 template <typename T>
-std::size_t Entity::FindAllInChildren(std::vector<T*>& into, bool includeSelf) {
+std::size_t Entity::FindAllInChildren(
+    std::vector<typename FindTargetOf<T>::type*>& into, bool includeSelf) {
+    using Target = typename FindTargetOf<T>::type;
     into.clear();
 
-    std::vector<T*> onThisEntity;
+    std::vector<Target*> onThisEntity;
     if (includeSelf) {
-        FindAll<T>(onThisEntity);
+        FindAll<Target>(onThisEntity);
         into.insert(into.end(), onThisEntity.begin(), onThisEntity.end());
     }
 
@@ -815,7 +993,7 @@ std::size_t Entity::FindAllInChildren(std::vector<T*>& into, bool includeSelf) {
             continue;
         }
         if (Entity* owner = scene->EntityOf(*node); owner != nullptr) {
-            owner->FindAll<T>(onThisEntity);
+            owner->FindAll<Target>(onThisEntity);
             into.insert(into.end(), onThisEntity.begin(), onThisEntity.end());
         }
         pending.insert(pending.end(), node->Children().begin(), node->Children().end());
@@ -824,12 +1002,14 @@ std::size_t Entity::FindAllInChildren(std::vector<T*>& into, bool includeSelf) {
 }
 
 template <typename T>
-std::size_t Entity::FindAllInParents(std::vector<T*>& into, bool includeSelf) {
+std::size_t Entity::FindAllInParents(
+    std::vector<typename FindTargetOf<T>::type*>& into, bool includeSelf) {
+    using Target = typename FindTargetOf<T>::type;
     into.clear();
 
-    std::vector<T*> onThisEntity;
+    std::vector<Target*> onThisEntity;
     if (includeSelf) {
-        FindAll<T>(onThisEntity);
+        FindAll<Target>(onThisEntity);
         into.insert(into.end(), onThisEntity.begin(), onThisEntity.end());
     }
 
@@ -845,7 +1025,7 @@ std::size_t Entity::FindAllInParents(std::vector<T*>& into, bool includeSelf) {
     for (const Transform2D* node = Transform().Parent(); node != nullptr;
          node                    = node->Parent()) {
         if (Entity* owner = scene->EntityOf(*node); owner != nullptr) {
-            owner->FindAll<T>(onThisEntity);
+            owner->FindAll<Target>(onThisEntity);
             into.insert(into.end(), onThisEntity.begin(), onThisEntity.end());
         }
     }

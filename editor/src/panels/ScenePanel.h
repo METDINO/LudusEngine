@@ -39,6 +39,7 @@
 //  coordinates the mouse arrives in.
 // ============================================================================
 
+#include "ColliderHandles.h"
 #include "Panel.h"
 
 #include <engine/Engine.h>
@@ -58,6 +59,12 @@ public:
     void OnHidden() override {
         m_hovered  = false;
         m_dragAxis = GizmoAxis::None;
+
+        // The collider handles' own drag too, for the same reason: a grab
+        // left half-finished when the tab changed would carry on when the
+        // panel came back, with the shape snapping to wherever the cursor had
+        // got to meanwhile.
+        ColliderEdit::Get().Stop();
     }
 
     // Called by EditorApp after every panel has drawn. Drawing the world
@@ -73,11 +80,12 @@ private:
 
     void UpdateGizmo(const ImVec2& imageOrigin);   // input  - runs BEFORE picking
     void DrawGizmo(const ImVec2& imageOrigin);     // output - runs after
-    void HandlePicking(const ImVec2& imageOrigin, bool painting);
+    void HandlePicking(const ImVec2& imageOrigin, bool painting, bool reshaping);
     void DrawOverlay();
     void FrameSelection();
 
-    // Tile painting, when the Tile Palette has a brush chosen. Returns true
+    // Tile painting, when a tilemap is selected and a brush is chosen in the
+    // Inspector's Tile Palette. Returns true
     // when it has taken the mouse, in which case picking and the right-drag
     // pan stand down - otherwise a stroke would also select whatever was
     // underneath it, and right-drag could not erase.

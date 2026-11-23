@@ -25,6 +25,27 @@
           "type": "TransformComponent"
         },
         {
+          "script": "GameController",
+          "type": "ScriptComponent"
+        }
+      ],
+      "name": "GameController"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
           "chunks": [
             {
               "at": [
@@ -106,7 +127,7 @@
         },
         {
           "collidesWith": [
-            "World"
+            "All"
           ],
           "friction": 0.0,
           "halfExtents": [
@@ -118,14 +139,19 @@
           "type": "BoxColliderComponent"
         },
         {
-          "bodyType": "Dynamic",
+          "bodyType": "Kinematic",
           "freezeRotation": true,
           "gravityScale": 1.0,
           "mass": 1.0,
           "type": "Rigidbody2DComponent"
         },
         {
-          "script": "TilemapWalker",
+          "actions": "input/player.oinput",
+          "defaultMap": "Gameplay",
+          "type": "PlayerInputComponent"
+        },
+        {
+          "script": "PlayerActions",
           "type": "ScriptComponent"
         },
         {
@@ -134,9 +160,60 @@
           "vars": {
             "bullet": "prefabs/bullet.oprefab"
           }
+        },
+        {
+          "script": "PlayerMovement",
+          "type": "ScriptComponent",
+          "vars": {
+            "movementSpeed": 200.0
+          }
+        },
+        {
+          "script": "TestScript",
+          "type": "ScriptComponent"
         }
       ],
       "name": "Player"
+    },
+    {
+      "components": [
+        {
+          "position": [
+            512.0,
+            240.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ],
+          "type": "TransformComponent"
+        },
+        {
+          "chunks": [
+            {
+              "at": [
+                -3,
+                -1
+              ],
+              "cells": "88:0 1 15:0 1 15:0 1 15:0 1 15:0 2:1 102:0"
+            },
+            {
+              "at": [
+                -2,
+                -1
+              ],
+              "cells": "82:0 3:1 13:0 1 157:0"
+            }
+          ],
+          "palette": [
+            "tiles/Fence.otile"
+          ],
+          "type": "TilemapComponent"
+        }
+      ],
+      "name": "Tilemap",
+      "parent": "Level"
     }
   ],
   "name": "<unnamed>",

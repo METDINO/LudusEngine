@@ -499,8 +499,67 @@ std::string DescribeHooks(const ScriptHooks& hooks);
 //  right name with the wrong arguments, the name from a different engine, and
 //  the OnUpdate(float) this engine itself used to have - into compile errors
 //  that say what to write instead.
+//
+//  ==========================================================================
+//  AND THAT HALF HAS A NAME OF ITS OWN: ENGINE_SCRIPT_CHECKS.
+//
+//  Not for anybody to write - a script still writes ENGINE_REGISTER_SCRIPT,
+//  which is this plus the registrar. It is split out for the IDE.
+//
+//  An IDE sees a script's .cpp ON ITS OWN, where another script's bare name
+//  means nothing at all, so the editor generates a header that declares every
+//  script in the project and force-includes it (see GenerateScriptScopeHeader
+//  in engine/tools/ScriptVars.h). In that arrangement the class the open file
+//  defines is at GLOBAL scope while its name is also a reference brought in
+//  by a using-directive - so the one unqualified use of its own name a script
+//  contains, the registrar line, is ambiguous there and nowhere else. That
+//  header ends by redefining ENGINE_REGISTER_SCRIPT to
+//
+//      ENGINE_SCRIPT_CHECKS(::Type)
+//
+//  which is unambiguous, keeps every message below working while you type,
+//  and leaves out only the registrar object - which an IDE never links and
+//  never runs. One definition of the checks, so the IDE cannot drift from the
+//  compiler about what a mistake is.
 // ----------------------------------------------------------------------------
-#define ENGINE_REGISTER_SCRIPT(Type)                                                   \
+// ===========================================================================
+//  DOES THIS SCRIPT DECLARE INPUT ACTION HANDLERS? Answered by whoever
+//  generated the file, and "assume so" when nobody did.
+//
+//  A method named after an action - void OnJump() for an action called
+//  "Jump" - is a real hook, but its NAME lives in a .oinput asset rather
+//  than in any header, so no concept here can test for it. C++20 cannot
+//  enumerate a class's members to go looking either.
+//
+//  THE EDITOR'S GENERATOR ANSWERS EXACTLY. It reads each script's source and
+//  brackets that body with the true answer, so the build that actually ships
+//  a script is checked as strictly as it ever was and with no guessing.
+//
+//  EVERYWHERE ELSE THE DEFAULT IS PERMISSIVE, which is the deliberate part.
+//  A fresh checkout, the game_scripts type-check target, an IDE before the
+//  first build, and the compile check behind this engine's own documentation
+//  examples all compile a script with no generated header anywhere - so none
+//  of them has any information, and a strict default there REFUSES VALID
+//  CODE. That is not hypothetical: `class PauseMenu` whose only member is
+//  void OnPause() is an ordinary script, it is what a Player Input component
+//  calls, and it failed to compile with a message saying nothing would ever
+//  call it.
+//
+//  Given a choice between refusing a script that is fine and accepting one
+//  that is empty, this takes the second - the same trade tools/ScriptVars.h
+//  states as a rule, applied where the generator genuinely cannot tell.
+//  NOTHING IS LOST: ScriptLibrary's load-time report knows the real handler
+//  list, because the generated unit registered it by name, and warns about a
+//  script that truly has nothing. An accurate warning beats a guessed error.
+//
+//  A BOOL AND NOT AN #ifdef, because the catch-all is one expression inside
+//  a macro and a preprocessor conditional cannot be written there.
+// ===========================================================================
+#ifndef ENGINE_SCRIPT_MAYBE_ACTIONS
+#    define ENGINE_SCRIPT_MAYBE_ACTIONS true
+#endif
+
+#define ENGINE_SCRIPT_CHECKS(Type)                                                     \
     /* --- is this even a script? ------------------------------------------ */       \
     static_assert(std::is_base_of_v<::eng::ScriptBehaviour, Type>,                     \
                   #Type " must inherit from eng::ScriptBehaviour: "                    \
@@ -665,6 +724,15 @@ std::string DescribeHooks(const ScriptHooks& hooks);
                   "Drop the \"2D\": this engine calls it OnTriggerEnter / Stay / "     \
                   "Exit.");                                                            \
     /* --- the catch-all, deliberately LAST ---------------------------------- */      \
+    /* INPUT ACTION HANDLERS COUNT, AND CANNOT BE SEEN FROM HERE. A script     */      \
+    /* whose only members are void OnJump() and void OnMove(eng::Vec2) is      */      \
+    /* perfectly ordinary - it is exactly what a Player Input component calls  */      \
+    /* - but the names come from an action map asset this header has never     */      \
+    /* seen, and C++20 cannot enumerate a class's members to go looking. So    */      \
+    /* the GENERATOR answers instead, by redefining the macro below around     */      \
+    /* each body whose source declares one. It defaults to TRUE: a path with   */      \
+    /* no generator cannot tell, and refusing a valid script is worse than     */      \
+    /* letting an empty one through. Only the generator ever says false.       */      \
     /* Every check above names one specific mistake, and a specific message is */      \
     /* worth more than a general one - so this general one is the last to fire. */     \
     /* The two old signatures are listed as well, so that a script hitting the  */     \
@@ -680,7 +748,8 @@ std::string DescribeHooks(const ScriptHooks& hooks);
                       ::eng::hooks::HasOnCollisionExit<Type> ||                        \
                       ::eng::hooks::HasOnTriggerEnter<Type> ||                         \
                       ::eng::hooks::HasOnTriggerStay<Type> ||                          \
-                      ::eng::hooks::HasOnTriggerExit<Type>,                            \
+                      ::eng::hooks::HasOnTriggerExit<Type> ||                          \
+                      ENGINE_SCRIPT_MAYBE_ACTIONS,                                     \
                   #Type " has none of the lifecycle functions, so nothing would ever " \
                         "call it. OnExpose does not count - it only lists variables "  \
                         "for the Inspector and never runs anything, so a script needs "\
@@ -689,7 +758,15 @@ std::string DescribeHooks(const ScriptHooks& hooks);
                         "OnUpdate, OnFixedUpdate, OnDestroy, "                         \
                         "OnCollisionEnter/Stay/Exit, OnTriggerEnter/Stay/Exit), and "  \
                         "that they are PUBLIC - the engine calls them from outside "   \
-                        "the class, so a private one cannot be seen.");                \
+                        "the class, so a private one cannot be seen.");
+
+// ----------------------------------------------------------------------------
+//  THE WHOLE THING: every check above, and then the one object that does the
+//  registering. This is what a script writes, and the only one of the two
+//  that is part of the scripting API.
+// ----------------------------------------------------------------------------
+#define ENGINE_REGISTER_SCRIPT(Type)                                                   \
+    ENGINE_SCRIPT_CHECKS(Type)                                                         \
     namespace {                                                                        \
     struct Type##_Registrar {                                                          \
         Type##_Registrar() {                                                           \

@@ -438,13 +438,50 @@ TEST_CASE("a reference to something that is not a component is left alone") {
     CHECK(Var(info, "nothing") == nullptr);
 }
 
-TEST_CASE("a component held by value says so, and says what to do") {
-    // The declaration that started this: four compiler errors, all of them on
-    // the three lines that USED the member and none on the line that declared
-    // it. This is the one place that sees the declaration, so it is the only
-    // place that can name it.
+TEST_CASE("a BARE component name is a reference, exactly as a script name is") {
+    // THE RULE THE WHOLE PAIR OF TESTS BELOW EXISTS FOR, and it is the one
+    // that makes an engine component and a script the same thing to write:
+    // inside a script the bare name is an alias for eng::ComponentRef<...>
+    // (see scene/ComponentAliases.h), so this declares a slot you drag an
+    // entity onto - not a component held by value.
+    //
+    // This used to be the by-value mistake, with a long message attached. It
+    // was never a mistake the author made; it was the one the engine made by
+    // giving its own components a different spelling from everybody else's.
     const ScriptSourceInfo info =
         ScanScriptSource(Wrap("    SpriteComponent m_sprite;"));
+
+    REQUIRE(Var(info, "m_sprite") != nullptr);
+    CHECK(Var(info, "m_sprite")->fieldType == ScriptFieldType::Entity);
+    CHECK(Var(info, "m_sprite")->requiredType == "SpriteComponent");
+    CHECK(info.skipped.empty());
+}
+
+TEST_CASE("every component's bare name is a reference, not just the famous ones") {
+    struct Expected { const char* decl; const char* name; const char* required; };
+    for (const Expected e : {
+             Expected{"    TransformComponent anchor;", "anchor", "TransformComponent"},
+             Expected{"    SpriteAnimationComponent anim;", "anim",
+                      "SpriteAnimationComponent"},
+             Expected{"    Rigidbody2DComponent body;", "body", "Rigidbody2DComponent"},
+             Expected{"    CameraComponent eye;", "eye", "CameraComponent"},
+             Expected{"    TilemapComponent ground;", "ground", "TilemapComponent"},
+             Expected{"    BoxColliderComponent area;", "area", "BoxColliderComponent"},
+             Expected{"    UITextComponent label;", "label", "UITextComponent"}}) {
+        const ScriptSourceInfo info = ScanScriptSource(Wrap(e.decl));
+        REQUIRE(Var(info, e.name) != nullptr);
+        CHECK(Var(info, e.name)->fieldType == ScriptFieldType::Entity);
+        CHECK(Var(info, e.name)->requiredType == e.required);
+    }
+}
+
+TEST_CASE("the QUALIFIED name is still the class, and by value is still wrong") {
+    // eng::SpriteComponent names the COMPONENT, and a script holding one by
+    // value owns a copy of a thing the entity owns. Keeping the two spellings
+    // apart is what lets the bare one become a reference without losing the
+    // diagnostic for the declaration that really is a mistake.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    eng::SpriteComponent m_sprite;"));
 
     CHECK(Var(info, "m_sprite") == nullptr);
     REQUIRE(Skipped(info, "m_sprite") != nullptr);
@@ -769,7 +806,7 @@ TEST_CASE("a script without OnExpose says so") {
 
 TEST_CASE("the generated unit includes the original rather than copying it") {
     // THE WHOLE TRICK. Including it keeps every line number, every __FILE__
-    // and the file's anonymous namespace intact, so a compiler error still
+    // and the file's own static helpers intact, so a compiler error still
     // points at the line somebody wrote.
     ScriptSourceInfo info;
     info.className = "Orbiter";
@@ -1354,4 +1391,1445 @@ TEST_CASE("a marker from the line above reaches the generated Asset call") {
 
     CHECK(unit.find("f.Asset(") != std::string::npos);
     CHECK(unit.find("\"animation\"") != std::string::npos);
+}
+
+// ===========================================================================
+//  A REFERENCE TO ANOTHER SCRIPT
+// ===========================================================================
+
+TEST_CASE("a script reference is a field, and takes its constraint from the type") {
+    // The same bargain ComponentRef makes, for a class the GAME defines. The
+    // difference is where the constraint comes from: a component carries
+    // T::kTypeName, so that class reads it off the type; a script class has no
+    // such thing, so the name is lifted out of the template argument HERE.
+    //
+    // It lands already matching, which is the whole reason one branch serves
+    // both: `Bullet` is character-for-character what ENGINE_REGISTER_SCRIPT
+    // stringizes, what the registry keys on, and what ScriptName() hands
+    // EntityHasNamed.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
+    ScriptRef<Bullet>      target;
+    eng::ScriptRef<Bullet> spare;
+    ScriptRef<Bullet>      squad[3];
+    ScriptRef <Bullet>     spaced;
+    ScriptRef<Bullet>      braced{};
+)CPP"));
+
+    for (const char* name : {"target", "spare", "spaced", "braced"}) {
+        REQUIRE_MESSAGE(Var(info, name) != nullptr, name);
+        CHECK(Var(info, name)->fieldType == ScriptFieldType::Entity);
+        CHECK(Var(info, name)->requiredType == "Bullet");
+    }
+
+    // An array is one row per element, as it is for every other field type.
+    REQUIRE(Var(info, "squad") != nullptr);
+    CHECK(Var(info, "squad")->isArray);
+    CHECK(Var(info, "squad")->requiredType == "Bullet");
+
+    CHECK(info.skipped.empty());
+}
+
+TEST_CASE("a script reference and a component reference live side by side") {
+    const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
+    ScriptRef<Bullet> target;
+    SpriteRenderer    flash;
+)CPP"));
+
+    REQUIRE(Var(info, "target") != nullptr);
+    REQUIRE(Var(info, "flash") != nullptr);
+    CHECK(Var(info, "target")->requiredType == "Bullet");
+    CHECK(Var(info, "flash")->requiredType == "SpriteComponent");
+}
+
+TEST_CASE("a marker still beats a script reference's own constraint") {
+    // The type is the DEFAULT constraint, not an override of what was asked
+    // for - the same rule the component case follows.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    ScriptRef<Bullet> target;   // [Rocket]"));
+
+    REQUIRE(Var(info, "target") != nullptr);
+    CHECK(Var(info, "target")->requiredType == "Rocket");
+}
+
+TEST_CASE("the closing angle bracket is counted, not guessed at") {
+    // THE BUG THIS PINS DOWN was a silent one, which is the sort this file
+    // exists to prevent: the closing '>' was found with rfind, so it was
+    // whichever '>' came last ON THE LINE. With a '>' in the initialiser the
+    // template argument came out as `Bullet> target = Pick<Bullet`, the
+    // synthetic spelling swallowed the variable's own name, and the member was
+    // neither exposed NOR listed as skipped - it simply ceased to exist.
+    //
+    // ComponentRef was wrong the same way, so both are checked here.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap(R"CPP(
+    ScriptRef<Bullet> target = Pick<Bullet>();
+    eng::ComponentRef<eng::SpriteComponent> flash = Pick<eng::SpriteComponent>();
+)CPP"));
+
+    REQUIRE_MESSAGE(Var(info, "target") != nullptr,
+                    "the initialiser's '>' swallowed the variable name");
+    CHECK(Var(info, "target")->requiredType == "Bullet");
+
+    REQUIRE_MESSAGE(Var(info, "flash") != nullptr,
+                    "the same bug, on the component spelling");
+    CHECK(Var(info, "flash")->requiredType == "SpriteComponent");
+}
+
+TEST_CASE("a nested template argument keeps its whole spelling") {
+    // Nothing registers a script under a nested name, so this never matches
+    // anything at runtime and ScriptFields::Ref says so. What matters here is
+    // that depth-counting does not stop at the inner '>' and mangle the name.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    ScriptRef<Outer<Inner>> odd;"));
+
+    REQUIRE(Var(info, "odd") != nullptr);
+    CHECK(Var(info, "odd")->requiredType == "Outer<Inner>");
+}
+
+TEST_CASE("an empty script reference argument is not a declaration") {
+    // ScriptRef<T> static_asserts on T, but that is a COMPILER's job and this
+    // parser never sees a type. The same answer the component case gives.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    ScriptRef<> nothing;"));
+    CHECK(Var(info, "nothing") == nullptr);
+}
+
+// ===========================================================================
+//  THE BARE SCRIPT NAME: `Door door;`
+//
+//  The spelling the reference feature exists for, and the one case this
+//  parser cannot judge from the line alone. `Door door;` and
+//  `Matrix4 basis;` are the same shape - two identifiers in a row - so the
+//  only thing that tells them apart is whether some file in the project
+//  registers a script called Door. That list is a PARAMETER, which is what
+//  keeps the scan pure: no registry, no engine state, no file system.
+// ===========================================================================
+
+TEST_CASE("a bare script name is a reference to that script") {
+    const std::vector<std::string> project{"Door", "Plate"};
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    Door door;"), project);
+
+    REQUIRE(Var(info, "door") != nullptr);
+    CHECK(Var(info, "door")->fieldType == ScriptFieldType::Entity);
+    CHECK(Var(info, "door")->requiredType == "Door");
+}
+
+TEST_CASE("a bare name that is not a script here is still not drawable") {
+    // THE OTHER HALF OF THE SAME RULE. With nothing registered under that
+    // name the member is a value of some type the Inspector cannot draw,
+    // which is what it was before this feature and what it must stay - a
+    // project with a Matrix4 must not find it turned into an entity slot.
+    const std::vector<std::string> project{"Door"};
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    Matrix4 basis;"), project);
+
+    CHECK(Var(info, "basis") == nullptr);
+    REQUIRE(Skipped(info, "basis") != nullptr);
+    CHECK(Skipped(info, "basis")->reason.find("not one the Inspector can draw") !=
+          std::string::npos);
+}
+
+TEST_CASE("the scan with no project list cannot see a bare script name") {
+    // The one-argument overload, which every caller with no project behind it
+    // uses - the Assets panel's "does this register anything", a lone file.
+    // It has to behave exactly as it did before the feature existed.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    Door door;"));
+    CHECK(Var(info, "door") == nullptr);
+}
+
+TEST_CASE("a bare script name with a star is still a pointer") {
+    // `Door* door;` MUST NOT become a reference: the name is matched as a
+    // whole word, so the star stops it and the member reaches the pointer
+    // branch - whose message is the one that tells the author to drop it.
+    const std::vector<std::string> project{"Door"};
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    Door* door;"), project);
+
+    CHECK(Var(info, "door") == nullptr);
+    REQUIRE(Skipped(info, "door") != nullptr);
+    CHECK(Skipped(info, "door")->reason.find("drop the star") != std::string::npos);
+}
+
+TEST_CASE("the explicit ScriptRef spelling still names the script") {
+    // IT HAS TO KEEP WORKING, and this is the test that says so. A script's
+    // bare name is now an alias for a reference to it, so `ScriptRef<Door>`
+    // asks for a reference to a reference - which the partial specialization
+    // in scene/ScriptRef.h collapses. What matters here is that the parser
+    // still reports the constraint as the SCRIPT.
+    const std::vector<std::string> project{"Door"};
+    const ScriptSourceInfo         info =
+        ScanScriptSource(Wrap("    ScriptRef<Door> door;"), project);
+
+    REQUIRE(Var(info, "door") != nullptr);
+    CHECK(Var(info, "door")->requiredType == "Door");
+}
+
+// ===========================================================================
+//  THE GENERATED UNIT, which is where the bare name actually becomes one
+// ===========================================================================
+
+TEST_CASE("the generated unit wraps each script and aliases its bare name") {
+    ScriptSourceInfo info;
+    info.className = "Plate";
+
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "#include <cmath>\nclass Door {};\n"},
+        {"Plate", "C:/p/Plate.cpp", "class Plate { Door door; };\n"},
+    };
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/gen/Plate__1.cpp");
+
+    // Each script in a namespace of its own, each followed by the alias that
+    // makes its bare name a reference everywhere else.
+    CHECK(unit.find("namespace s_Door {") != std::string::npos);
+    CHECK(unit.find("using Door = ::eng::ScriptRef<s_Door::Door>;") != std::string::npos);
+    CHECK(unit.find("using Plate = ::eng::ScriptRef<s_Plate::Plate>;") !=
+          std::string::npos);
+
+    // THE ORDER IS THE ORDER GIVEN: Plate's body names Door, so Door has to
+    // be complete first. Reversing this is the one thing that cannot compile.
+    CHECK(unit.find("namespace s_Door") < unit.find("namespace s_Plate"));
+
+    // AND THE INCLUDE CAME OUT. Left inside the namespace, <cmath> would have
+    // put std::cos in s_Door - the failure that made hoisting necessary.
+    REQUIRE(unit.find("#include <cmath>") != std::string::npos);
+    CHECK(unit.find("#include <cmath>") < unit.find("namespace s_Door"));
+}
+
+TEST_CASE("hoisting an include leaves the line numbering alone") {
+    // #line 1 claims the body starts at the author's line 1, so every line
+    // after a hoisted include has to still be where it was. Without the blank
+    // that stands in for it, every diagnostic below an include is reported
+    // one line too high - per include, which is the sort of off-by-N that
+    // makes a compiler error useless.
+    ScriptSourceInfo info;
+    info.className = "Door";
+
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp",
+         "#include <cmath>\n#include <string>\nclass Door {};\n"}};
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/gen/Door__1.cpp");
+
+    const std::size_t marker = unit.find("#line 1 \"C:/p/Door.cpp\"");
+    REQUIRE(marker != std::string::npos);
+    const std::size_t bodyStart = unit.find('\n', marker) + 1;
+    const std::size_t classAt   = unit.find("class Door {};", bodyStart);
+    REQUIRE(classAt != std::string::npos);
+
+    // Two blanks for the two hoisted includes, so `class` is still the third
+    // line of the body exactly as it is the third line of the file.
+    CHECK(unit.substr(bodyStart, classAt - bodyStart) == "\n\n");
+}
+
+TEST_CASE("a script with a hand-written OnExpose gets no generated exposer") {
+    // THE HAND-WRITTEN LIST WINS, and two exposers for one script would mean
+    // the generated one overwrote it. The wrapping still has to happen - the
+    // class must be in its namespace in every unit or no library can cast to
+    // it - so this is about the exposer alone.
+    ScriptSourceInfo info;
+    info.className   = "Door";
+    info.hasOnExpose = true;
+
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "class Door {};\n"}};
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/gen/Door__1.cpp");
+
+    CHECK(unit.find("namespace s_Door {") != std::string::npos);
+    CHECK(unit.find("SetExposer") == std::string::npos);
+}
+
+// ===========================================================================
+//  A REFERENCE POINTING EITHER WAY, which is what makes this a feature rather
+//  than a demonstration. The bug these cover: the alias used to be written
+//  AFTER each namespace, so a script could only name the ones wrapped before
+//  it - and no order puts both of a mutual pair first.
+// ===========================================================================
+
+TEST_CASE("every script is declared and aliased before any of them is defined") {
+    ScriptSourceInfo info;
+    info.className = "Door";
+
+    // Door FIRST and naming DoorSwitch: the order that could not work while
+    // the alias came after the namespace it belonged to.
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "class Door { DoorSwitch plate; };\n"},
+        {"DoorSwitch", "C:/p/DoorSwitch.cpp", "class DoorSwitch { Door door; };\n"},
+    };
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/gen/Door__1.cpp");
+
+    const std::size_t declared =
+        unit.find("namespace s_DoorSwitch { class DoorSwitch; }");
+    const std::size_t alias =
+        unit.find("using DoorSwitch = ::eng::ScriptRef<s_DoorSwitch::DoorSwitch>;");
+    const std::size_t firstBody = unit.find("namespace s_Door {\n");
+
+    REQUIRE(declared != std::string::npos);
+    REQUIRE(alias != std::string::npos);
+    REQUIRE(firstBody != std::string::npos);
+
+    // Both before the first script's text, which is the whole point: a
+    // ScriptRef needs its T declared, never finished.
+    CHECK(declared < firstBody);
+    CHECK(alias < firstBody);
+}
+
+TEST_CASE("the alias is re-declared inside every other script's namespace") {
+    // WHY IT HAS TO BE. Each namespace gets a using-directive for every other
+    // one, so that one script can call another's file-scope helpers - and
+    // that directive also drags in the other script's CLASS, which would be
+    // ambiguous against the alias at global scope. A declaration in this
+    // namespace beats anything a directive brought in, so the alias is
+    // written again here. FORWARDS AS WELL AS BACK, or the pair above breaks
+    // again for whichever one comes first.
+    ScriptSourceInfo info;
+    info.className = "Door";
+
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "class Door { DoorSwitch plate; };\n"},
+        {"DoorSwitch", "C:/p/DoorSwitch.cpp", "class DoorSwitch { Door door; };\n"},
+    };
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/gen/Door__1.cpp");
+
+    const std::size_t doorBody = unit.find("namespace s_Door {\n");
+    REQUIRE(doorBody != std::string::npos);
+    const std::size_t doorText = unit.find("#line 1 \"C:/p/Door.cpp\"");
+    REQUIRE(doorText != std::string::npos);
+
+    // Inside s_Door, before Door.cpp's own text: the directive, and the alias
+    // that re-hides the class it brought in.
+    const std::size_t directive = unit.find("using namespace s_DoorSwitch;", doorBody);
+    const std::size_t hide =
+        unit.find("using DoorSwitch = ::eng::ScriptRef<s_DoorSwitch::DoorSwitch>;",
+                  doorBody);
+    REQUIRE(directive != std::string::npos);
+    REQUIRE(hide != std::string::npos);
+    CHECK(directive < doorText);
+    CHECK(hide < doorText);
+}
+
+TEST_CASE("a struct keeps its keyword in the declaration it gets") {
+    // A `class Door;` declaration for a `struct Door` definition is legal and
+    // earns warning C4099 for it - about a line in a generated file, naming a
+    // difference the author cannot see from their own code.
+    ScriptSourceInfo info;
+    info.className = "Tally";
+
+    std::vector<ScriptUnitSource> sources{
+        {"Tally", "C:/p/Tally.cpp", "struct Tally {};\n", "struct"}};
+    CHECK(GenerateScriptUnit(info, sources, "C:/gen/T__1.cpp")
+              .find("namespace s_Tally { struct Tally; }") != std::string::npos);
+
+    sources[0].classKey = "class";
+    CHECK(GenerateScriptUnit(info, sources, "C:/gen/T__1.cpp")
+              .find("namespace s_Tally { class Tally; }") != std::string::npos);
+}
+
+// ===========================================================================
+//  THE FOUR TEXT QUESTIONS THE BUILD ASKS, which live beside the scan rather
+//  than in the editor so that they can be asked without building a project.
+// ===========================================================================
+
+TEST_CASE("comments are blanked out, and nothing else is") {
+    const std::string source =
+        "int a;  // other->Method() is what a pair cannot do\n"
+        "int b;  /* and\n"
+        "          nor is this */\n"
+        "const char* url = \"http://example.com/a//b\";\n";
+    const std::string code = StripComments(source);
+
+    // The code survives; the prose does not.
+    CHECK(code.find("int a;") != std::string::npos);
+    CHECK(code.find("int b;") != std::string::npos);
+    CHECK(code.find("other->Method()") == std::string::npos);
+    CHECK(code.find("nor is this") == std::string::npos);
+
+    // A `//` INSIDE A STRING IS NOT A COMMENT, which is why literals are
+    // tracked at all - a URL or a Windows path would otherwise take the rest
+    // of its line with it.
+    CHECK(code.find("\"http://example.com/a//b\"") != std::string::npos);
+
+    // SAME LENGTH AND SAME LINES, so anything reported about one is true of
+    // the other.
+    REQUIRE(code.size() == source.size());
+    CHECK(std::count(code.begin(), code.end(), '\n') ==
+          std::count(source.begin(), source.end(), '\n'));
+}
+
+TEST_CASE("reaching through a reference is told from merely holding one") {
+    // The distinction the wrapping order turns on. Only the arrow needs the
+    // other script FINISHED; everything else goes through ScriptRef's own
+    // members, which are compiled once the whole unit has been read.
+    CHECK(ReachesThroughReference("if (plate) { plate->Open(); }", "plate"));
+    CHECK(ReachesThroughReference("plate   ->Open();", "plate"));   // spaced
+
+    CHECK_FALSE(ReachesThroughReference("DoorSwitch plate;", "plate"));
+    CHECK_FALSE(ReachesThroughReference("if (plate) {}", "plate"));
+    CHECK_FALSE(ReachesThroughReference("plate.IsSet();", "plate"));
+
+    // A WHOLE WORD. `plateEdge->x` is a different member, and counting it
+    // would invent an ordering edge - which in a mutual pair is the
+    // difference between a build and a loop nobody wrote.
+    CHECK_FALSE(ReachesThroughReference("plateEdge->Open();", "plate"));
+    CHECK_FALSE(ReachesThroughReference("myplate->Open();", "plate"));
+}
+
+TEST_CASE("a base class is found, and the bare spelling told from the right one") {
+    const std::vector<std::string> scripts{"Door", "DoorSwitch"};
+
+    // `Door::ScriptType` is the spelling that works, because the bare name is
+    // a reference and a base class has to be the class.
+    const auto good = BaseScriptsOf("class Sliding final : public Door::ScriptType {};",
+                                    "Sliding", scripts);
+    REQUIRE(good.size() == 1);
+    CHECK(good[0].name == "Door");
+    CHECK(good[0].qualified);
+
+    const auto bare =
+        BaseScriptsOf("class Sliding final : public Door {};", "Sliding", scripts);
+    REQUIRE(bare.size() == 1);
+    CHECK(bare[0].name == "Door");
+    CHECK_FALSE(bare[0].qualified);
+
+    // ONLY THE BASE-CLAUSE. A script name in the BODY is a member's type, and
+    // reading it as a base would order the build around a reference that does
+    // not need it.
+    CHECK(BaseScriptsOf("class Sliding final : public eng::ScriptBehaviour {\n"
+                        "    Door door;\n};",
+                        "Sliding", scripts)
+              .empty());
+
+    // And a script with no base-clause at all.
+    CHECK(BaseScriptsOf("class Sliding {};", "Sliding", scripts).empty());
+}
+
+TEST_CASE("the class keyword is read off the definition, not guessed") {
+    CHECK(ClassKeyOf("struct Tally final : public eng::ScriptBehaviour {};", "Tally") ==
+          "struct");
+    CHECK(ClassKeyOf("class Tally final : public eng::ScriptBehaviour {};", "Tally") ==
+          "class");
+
+    // A FORWARD DECLARATION IS NOT A DEFINITION, so it is not what the
+    // keyword is taken from - and with nothing to read at all, `class` is the
+    // answer, which is what every script written from the templates says.
+    CHECK(ClassKeyOf("struct Tally;\nclass Tally {};", "Tally") == "class");
+    CHECK(ClassKeyOf("nothing here at all", "Tally") == "class");
+}
+
+// ===========================================================================
+//  THE HEADER AN IDE READS. What makes it different from a generated unit is
+//  the one thing it has to get right: the alias for the script in the file
+//  being edited cannot sit at global scope, because that file declares a
+//  class of exactly that name there.
+// ===========================================================================
+
+TEST_CASE("the scope header puts the bare names in a namespace, not at global scope") {
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "#include <cmath>\nclass Door { DoorSwitch p; };\n"},
+        {"DoorSwitch", "C:/p/DoorSwitch.cpp", "class DoorSwitch { Door d; };\n"},
+    };
+    const std::string header = GenerateScriptScopeHeader(sources);
+
+    // Every script declared, so the aliases can be formed.
+    CHECK(header.find("namespace s_Door { class Door; }") != std::string::npos);
+    CHECK(header.find("namespace s_DoorSwitch { class DoorSwitch; }") !=
+          std::string::npos);
+
+    // The aliases, inside the namespace that keeps them out of the way.
+    const std::size_t block = header.find("namespace engine_script_names {");
+    const std::size_t alias =
+        header.find("using Door = ::eng::ScriptRef<s_Door::Door>;");
+    const std::size_t directive = header.find("using namespace engine_script_names;");
+    REQUIRE(block != std::string::npos);
+    REQUIRE(alias != std::string::npos);
+    REQUIRE(directive != std::string::npos);
+    CHECK(block < alias);
+    CHECK(alias < directive);
+
+    // AND THE BODIES AFTER THE DIRECTIVE, so that a script's own text can see
+    // the other scripts' names - the same order the generated unit uses.
+    const std::size_t body = header.find("#line 1 \"C:/p/Door.cpp\"");
+    REQUIRE(body != std::string::npos);
+    CHECK(directive < body);
+
+    // The include hoisted above all of it, for the reason a unit hoists it:
+    // inside a namespace it would put std::cos in there too.
+    const std::size_t hoisted = header.find("#include <cmath>");
+    REQUIRE(hoisted != std::string::npos);
+    CHECK(hoisted < block);
+
+    // ENGINE'S OWN HEADER EXACTLY ONCE. #pragma once makes a repeat harmless,
+    // and a generated file with a visibly duplicated line invites somebody to
+    // wonder which copy is the mistake.
+    std::size_t engineIncludes = 0;
+    for (std::size_t at = header.find("#include <engine/Engine.h>");
+         at != std::string::npos;
+         at = header.find("#include <engine/Engine.h>", at + 1)) {
+        ++engineIncludes;
+    }
+    CHECK(engineIncludes == 1);
+}
+
+TEST_CASE("the scope header requalifies the registrar, which is load-bearing") {
+    // A script names itself unqualified exactly once, on its
+    // ENGINE_REGISTER_SCRIPT line - and in this arrangement that name is both
+    // the class the open file defines and a reference brought in by the
+    // using-directive above. Measured without these two lines: `error C2872:
+    // 'Gun': ambiguous symbol` on that line, in every script.
+    const std::vector<ScriptUnitSource> sources{
+        {"Door", "C:/p/Door.cpp", "class Door {};\n"}};
+    const std::string header = GenerateScriptScopeHeader(sources);
+
+    const std::size_t undef    = header.find("#undef ENGINE_REGISTER_SCRIPT");
+    const std::size_t redefine = header.find(
+        "#define ENGINE_REGISTER_SCRIPT(Type) ENGINE_SCRIPT_CHECKS(::Type)");
+    REQUIRE(undef != std::string::npos);
+    REQUIRE(redefine != std::string::npos);
+    CHECK(undef < redefine);
+
+    // LAST, so it applies to the file being edited and not to the copies
+    // above it - those are inside their own namespaces, where the bare name
+    // is the class and the ordinary macro is right.
+    CHECK(redefine > header.find("#line 1 \"C:/p/Door.cpp\""));
+}
+
+TEST_CASE("the scope header declares a struct as a struct") {
+    const std::vector<ScriptUnitSource> sources{
+        {"Tally", "C:/p/Tally.cpp", "struct Tally {};\n", "struct"}};
+    CHECK(GenerateScriptScopeHeader(sources).find(
+              "namespace s_Tally { struct Tally; }") != std::string::npos);
+}
+
+TEST_CASE("a project with no scripts still gets a usable scope header") {
+    // WRITTEN EVEN THEN, because the configuration names it by path and a
+    // forcedInclude pointing at a file that does not exist is an error every
+    // IDE reports against every file. A new project is this case.
+    const std::string header = GenerateScriptScopeHeader({});
+
+    CHECK(header.find("#pragma once") != std::string::npos);
+    CHECK(header.find("#include <engine/Engine.h>") != std::string::npos);
+    CHECK(header.find("namespace engine_script_names {") != std::string::npos);
+    CHECK(header.find("#undef ENGINE_REGISTER_SCRIPT") != std::string::npos);
+}
+
+// ===========================================================================
+//  A SCRIPT NAMED AFTER A TYPE, AND A VARIABLE THAT NEVER ARRIVES
+//
+//  Two different silent failures, one of which used to be documented as
+//  caught and was not. Both are about the gap between what this parser READS
+//  and what the compiler later DOES, which is the one gap a whitelist parser
+//  can always have and the one it must never have quietly.
+// ===========================================================================
+
+TEST_CASE("a script name that shadows a field type is named, with the spelling") {
+    // THE SET THAT FAILS QUIETLY: a script called Color makes `Color tint;`
+    // in every other script mean a reference to it, the guard accepts a
+    // ScriptRef, and the Inspector draws an entity slot where a colour picker
+    // was asked for.
+    for (const char* name : {"Color", "Vec2", "Vector2", "EntityRef", "PrefabRef",
+                             "AnimationRef", "ImageRef", "TransformRef",
+                             "SpriteRenderer", "Rigidbody2D"}) {
+        const std::string_view shadowed = ScriptNameShadowsFieldType(name);
+        CHECK(shadowed == name);
+    }
+}
+
+TEST_CASE("an ordinary script name shadows nothing") {
+    // INCLUDING NAMES THAT LOOK DANGEROUS AND ARE NOT. `Entity` and `Scene`
+    // are engine types, but nothing can be declared as a FIELD of one, so a
+    // script by that name is caught by the compiler rather than by silence -
+    // which is the line this check is drawn on. See ScriptVars.h.
+    for (const char* name : {"Door", "DoorSwitch", "Player", "Entity", "Scene",
+                             "Debug", "Colour", "MyColor", "Color2", ""}) {
+        CHECK(ScriptNameShadowsFieldType(name).empty());
+    }
+}
+
+TEST_CASE("a qualified spelling cannot be shadowed, because it cannot be a name") {
+    // "eng::Color" and "std::string" are in the same table, and neither can
+    // ever collide: a colon is not an identifier character, so no class can
+    // be called that. Skipping them is correctness rather than tidiness - a
+    // match would report a collision that cannot happen.
+    CHECK(ScriptNameShadowsFieldType("eng::Color").empty());
+    CHECK(ScriptNameShadowsFieldType("std::string").empty());
+}
+
+TEST_CASE("the exposer checks that every variable it was told to expose arrived") {
+    // ======================================================================
+    //  THE CLAIM THAT USED TO BE FALSE. A variable whose `requires` guard
+    //  turns out false compiles away - deliberately, so a parser's guess
+    //  cannot break somebody's build - and it was then in neither the
+    //  Inspector nor the skipped report, after the Console had already
+    //  announced it by name.
+    //
+    //  Only the generated code can see that: the guard is resolved by the
+    //  compiler against the real class, long after this parser has finished.
+    // ======================================================================
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class T final : public eng::ScriptBehaviour {
+        public:
+            float speed = 1.0f;
+            int   lives = 3;
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(T)
+    )");
+
+    const std::string unit = GenerateExposerUnit(info, "scripts/T.cpp");
+
+    // Every accepted variable is in the list the generated code checks.
+    CHECK(unit.find("\"speed\", \"lives\"") != std::string::npos);
+    CHECK(unit.find("fields.Find(expected)") != std::string::npos);
+
+    // ONCE PER LIBRARY LOAD, not once per component: binding happens for
+    // every entity carrying the script, and a warning per entity would bury
+    // the one that matters.
+    CHECK(unit.find("static bool engineExposeChecked") != std::string::npos);
+}
+
+TEST_CASE("an array is checked by its first element") {
+    // The loop that expands an array runs over std::size() at RUN time, so
+    // there is no static list of element names to check against. The guard is
+    // inside that loop and does not vary with the index, so either every
+    // element arrived or none did - and asking about [0] asks about all of
+    // them.
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class T final : public eng::ScriptBehaviour {
+        public:
+            float weights[4];
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(T)
+    )");
+
+    const std::string unit = GenerateExposerUnit(info, "scripts/T.cpp");
+    CHECK(unit.find("\"weights[0]\"") != std::string::npos);
+}
+
+TEST_CASE("a script with no variables gets no check to run") {
+    // Nothing to verify means nothing emitted - not an empty loop that costs
+    // a static and a branch on every bind for every script in the project,
+    // which is most of them.
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class T final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(T)
+    )");
+
+    const std::string unit = GenerateExposerUnit(info, "scripts/T.cpp");
+    CHECK(unit.find("engineExposeChecked") == std::string::npos);
+}
+
+// ===========================================================================
+//  RESOLVING A REFERENCE versus merely holding one
+//
+//  The question that decides whether a script's unit needs another script's
+//  DEFINITION, as opposed to the ordering question ReachesThroughReference
+//  answers. The boundary below is measured against the real toolchain - see
+//  the table in ScriptVars.h - and the test names say which side each one is.
+// ===========================================================================
+
+TEST_CASE("holding a reference does not resolve it") {
+    // THE DECLARATION IS NOT A USE. Counting it would make every held
+    // reference look like a resolved one, which is the whole distinction.
+    CHECK(!ResolvesReference("DoorSwitch doorSwitch;", "DoorSwitch", "doorSwitch"));
+
+    // Nor is an array of them.
+    CHECK(!ResolvesReference("DoorSwitch plates[4];", "DoorSwitch", "plates"));
+}
+
+TEST_CASE("EntityRef's own members do not resolve a reference") {
+    // Every one of these is compiled against EntityRef rather than against T,
+    // so the class behind the name can be a forward declaration.
+    for (const char* body : {"if (!doorSwitch.IsSet()) { }",
+                             "doorSwitch.Clear();",
+                             "doorSwitch.Set(\"Plate A\");",
+                             "auto n = doorSwitch.TargetName();",
+                             "DoorSwitch doorSwitch; doorSwitch.Set(x);"}) {
+        CHECK(!ResolvesReference(body, "DoorSwitch", "doorSwitch"));
+    }
+}
+
+TEST_CASE("an element of an array is judged like a plain member") {
+    CHECK(!ResolvesReference("plates[0].IsSet();", "DoorSwitch", "plates"));
+    CHECK(!ResolvesReference("plates[i + 1].Set(n);", "DoorSwitch", "plates"));
+    CHECK(ResolvesReference("plates[0]->Open();", "DoorSwitch", "plates"));
+    CHECK(ResolvesReference("if (plates[2]) { }", "DoorSwitch", "plates"));
+}
+
+TEST_CASE("reaching through a reference resolves it") {
+    CHECK(ResolvesReference("doorSwitch->OpensOnce();", "DoorSwitch", "doorSwitch"));
+    CHECK(ResolvesReference("doorSwitch ->OpensOnce();", "DoorSwitch", "doorSwitch"));
+}
+
+TEST_CASE("Get() resolves it, and it is the one dot that does") {
+    // ======================================================================
+    //  THE CASE A SIMPLER RULE GETS WRONG, in the dangerous direction.
+    //
+    //  ScriptRef<T> adds exactly three members to EntityRef - Get(),
+    //  operator-> and operator bool - and all three need T whole. Everything
+    //  else written after a dot is EntityRef's. So "a dot means safe" is
+    //  right about five spellings and wrong about this one, and being wrong
+    //  here leaves a definition out of a unit that needed it.
+    // ======================================================================
+    CHECK(ResolvesReference("if (doorSwitch.Get() != nullptr) { }", "DoorSwitch",
+                            "doorSwitch"));
+    CHECK(ResolvesReference("auto* p = doorSwitch . Get();", "DoorSwitch",
+                            "doorSwitch"));
+
+    // And a member whose name merely STARTS with Get is not Get.
+    CHECK(!ResolvesReference("doorSwitch.GetName();", "DoorSwitch", "doorSwitch"));
+}
+
+TEST_CASE("testing a reference resolves it, which is the one that surprises") {
+    // operator bool calls Get(), whose static_assert asks __is_base_of of T.
+    // It compiles today only because every unit holds every definition and a
+    // class template's members are instantiated at the END of the unit. See
+    // the note on ReachesThroughReference.
+    for (const char* body : {"if (doorSwitch) { }",
+                             "if (!doorSwitch) { }",
+                             "return doorSwitch ? 1 : 0;",
+                             "bool ok = static_cast<bool>(doorSwitch);"}) {
+        CHECK(ResolvesReference(body, "DoorSwitch", "doorSwitch"));
+    }
+}
+
+TEST_CASE("a name that merely contains the member's is not the member") {
+    CHECK(!ResolvesReference("myDoorSwitchThing->X();", "DoorSwitch", "doorSwitch"));
+    CHECK(!ResolvesReference("other.doorSwitchCount = 1;", "DoorSwitch",
+                             "doorSwitch"));
+}
+
+TEST_CASE("the real example is a definition CYCLE, which is why it matters") {
+    // ======================================================================
+    //  assets/scripts/Script References/ is the worked pair, and under this
+    //  rule it is mutual: DoorSwitch calls `door->Open()`, and Door tests
+    //  `if (!doorSwitch)`. Both need the other WHOLE.
+    //
+    //  That is not a contradiction - both compile today, in one unit - but it
+    //  does mean the two cannot be split into separate translation units.
+    //  Anything that divides the units has to keep a cycle together.
+    // ======================================================================
+    CHECK(ResolvesReference("door->Open(); door->Close();", "Door", "door"));
+    CHECK(ResolvesReference("if (!doorSwitch.IsSet()) { } else if (!doorSwitch) { }",
+                            "DoorSwitch", "doorSwitch"));
+}
+
+TEST_CASE("an empty member name resolves nothing") {
+    CHECK(!ResolvesReference("anything at all", "DoorSwitch", ""));
+}
+
+// ===========================================================================
+//  A UNIT THAT CARRIES FEWER THAN EVERY SCRIPT
+//
+//  Every script is still DECLARED and ALIASED in every unit - that is one
+//  line each and it is what keeps `Door door;` legal anywhere. What narrows
+//  is which class BODIES are wrapped in, and that is what decides how much a
+//  change to one script rebuilds. See ScriptUnitSource::defineHere.
+// ===========================================================================
+
+namespace {
+
+ScriptUnitSource UnitSource(const char* name, const char* text,
+                            bool defineHere = true) {
+    ScriptUnitSource src;
+    src.className  = name;
+    src.realPath   = std::string("C:/p/assets/scripts/") + name + ".cpp";
+    src.text       = text;
+    src.defineHere = defineHere;
+    return src;
+}
+
+} // namespace
+
+TEST_CASE("a script left out is still declared and still aliased") {
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class Holder final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(Holder)
+    )");
+
+    const std::vector<ScriptUnitSource> sources{
+        UnitSource("Absent", "class Absent final : public eng::ScriptBehaviour {\n"
+                             "public:\n    int marker = 7;\n    void OnUpdate() {}\n};\n",
+                   /*defineHere=*/false),
+        UnitSource("Holder", "class Holder final : public eng::ScriptBehaviour {\n"
+                             "public:\n    Absent absent;\n    void OnUpdate() {}\n};\n"),
+    };
+
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/p/.build/u.cpp");
+
+    // THE DECLARATION AND THE ALIAS ARE WHAT MAKE `Absent absent;` LEGAL, so
+    // they are written whether or not the class is.
+    CHECK(unit.find("namespace s_Absent { class Absent; }") != std::string::npos);
+    CHECK(unit.find("using Absent = ::eng::ScriptRef<s_Absent::Absent>;") !=
+          std::string::npos);
+
+    // AND THE BODY IS NOT THERE. `marker` is the only thing unique to it.
+    CHECK(unit.find("marker") == std::string::npos);
+
+    // The script this unit is FOR is of course defined.
+    CHECK(unit.find("Absent absent;") != std::string::npos);
+}
+
+TEST_CASE("a script that is left out contributes no includes either") {
+    // A unit that does not define a script does not need its headers, and
+    // hoisting them would make every unit pay for every script's includes -
+    // which is most of what leaving a script out is meant to save.
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class Holder final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(Holder)
+    )");
+
+    const std::vector<ScriptUnitSource> sources{
+        UnitSource("Absent", "#include <unreachable_header_xyz>\n"
+                             "class Absent final : public eng::ScriptBehaviour {\n"
+                             "public:\n    void OnUpdate() {}\n};\n",
+                   /*defineHere=*/false),
+        UnitSource("Holder", "class Holder final : public eng::ScriptBehaviour {\n"
+                             "public:\n    void OnUpdate() {}\n};\n"),
+    };
+
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/p/.build/u.cpp");
+    CHECK(unit.find("unreachable_header_xyz") == std::string::npos);
+}
+
+TEST_CASE("by default every script is defined, which is what it always did") {
+    // defineHere is true unless somebody sets it, so a caller that knows
+    // nothing about splitting gets the whole project in one unit - the
+    // behaviour every test above this one relies on.
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class Holder final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(Holder)
+    )");
+
+    const std::vector<ScriptUnitSource> sources{
+        UnitSource("Other", "class Other final : public eng::ScriptBehaviour {\n"
+                            "public:\n    int marker = 7;\n    void OnUpdate() {}\n};\n"),
+        UnitSource("Holder", "class Holder final : public eng::ScriptBehaviour {\n"
+                             "public:\n    void OnUpdate() {}\n};\n"),
+    };
+
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/p/.build/u.cpp");
+    CHECK(unit.find("marker") != std::string::npos);
+}
+
+// ===========================================================================
+//  MEMBERS THE INSPECTOR NEVER SEES, which is what made a member's ACCESS
+//  LEVEL decide whether the project compiled.
+// ===========================================================================
+
+TEST_CASE("a member of a script type is found whatever its access level") {
+    // THIS IS THE WHOLE POINT. The scan that feeds the Inspector only offers
+    // PUBLIC variables, so the closure that decides which definitions a unit
+    // carries never heard about a private one - and the generated unit then
+    // held a forward declaration where the body had to be.
+    const char* body =
+        "class Probe final : public MyScriptBehaviour {\n"
+        "public:\n"
+        "    void OnStart() { invis->ToggleInvisibility(); }\n"
+        "private:\n"
+        "    Invisibility invis;\n"
+        "};\n";
+
+    const std::vector<std::string> members = MembersOfScriptType(body, "Invisibility");
+    REQUIRE(members.size() == 1);
+    CHECK(members[0] == "invis");
+
+    // And having found it, the ordinary predicate answers about it as usual.
+    CHECK(ResolvesReference(body, "Invisibility", "invis"));
+}
+
+TEST_CASE("every declaration of the type is found, once each") {
+    const char* body =
+        "    Door front;\n"
+        "    Door back;\n"
+        "    Door gates[4];\n"
+        "    Door front;\n";   // written twice; reported once
+
+    const std::vector<std::string> members = MembersOfScriptType(body, "Door");
+    REQUIRE(members.size() == 3);
+    CHECK(members[0] == "front");
+    CHECK(members[1] == "back");
+    CHECK(members[2] == "gates");
+}
+
+TEST_CASE("mentioning a script type is not declaring a member of it") {
+    // Nothing here leaves an identifier straight after the type name, so
+    // none of it is a declaration. Over-approximating costs a rebuild, but
+    // guessing a member name out of a cast would cost a wrong answer.
+    for (const char* body : {"eng::FindScriptOn<Door::ScriptType>(*Owner());",
+                             "eng::ScriptRef<Door> r;",
+                             "auto* p = static_cast<Door*>(q);",
+                             "Door();",
+                             "class Sliding final : public Door::ScriptType {};"}) {
+        CHECK(MembersOfScriptType(body, "Door").empty());
+    }
+
+    // A longer name that merely CONTAINS the type is not the type.
+    CHECK(MembersOfScriptType("DoorSwitch plate;", "Door").empty());
+}
+
+TEST_CASE("MembersOfScriptType is empty for a name that is not there") {
+    CHECK(MembersOfScriptType("int speed = 2;", "Door").empty());
+    CHECK(MembersOfScriptType("Door door;", "").empty());
+    CHECK(MembersOfScriptType("", "Door").empty());
+}
+
+TEST_CASE("a qualified name reaches the class and needs its definition") {
+    // `Door::ScriptType` is the one spelling that names the CLASS rather than
+    // a reference to it, and it can be written with no member of that type
+    // anywhere in the file - which is why it is asked separately.
+    CHECK(NamesScriptTypeQualified("eng::FindScriptOn<Door::ScriptType>(*Owner());",
+                                   "Door"));
+    CHECK(NamesScriptTypeQualified("class Sliding final : public Door::ScriptType {};",
+                                   "Door"));
+    CHECK(NamesScriptTypeQualified("Door::ScriptType::SomeHelper();", "Door"));
+}
+
+TEST_CASE("an unqualified name does not, because it is only a reference") {
+    // `Door door;` holds a reference. The forward declaration is enough for
+    // that, and saying otherwise would put every script back in every unit.
+    CHECK(!NamesScriptTypeQualified("Door door;", "Door"));
+    CHECK(!NamesScriptTypeQualified("door->Open();", "Door"));
+    CHECK(!NamesScriptTypeQualified("eng::ScriptRef<Door> r;", "Door"));
+
+    // And a different name that ends where this one does is not this one.
+    CHECK(!NamesScriptTypeQualified("MyDoor::ScriptType::X();", "Door"));
+    CHECK(!NamesScriptTypeQualified("", "Door"));
+    CHECK(!NamesScriptTypeQualified("Door::ScriptType::X();", ""));
+}
+
+// ===========================================================================
+//  A REFERENCE ASSIGNED FROM Find, which is the first thing somebody writes
+//  and the one mistake the scan used to say nothing at all about.
+// ===========================================================================
+
+TEST_CASE("a reference assigned from Find is recognised") {
+    // The real line out of a real project, which produced a bare C2679 whose
+    // only type name was an internal generated namespace.
+    CHECK(AssignedFromFind("invis = Find<Invisibility>();", "invis"));
+
+    // Whatever is asked for, and however it is spaced or qualified.
+    CHECK(AssignedFromFind("anim = Find<eng::SpriteAnimationComponent>();", "anim"));
+    CHECK(AssignedFromFind("rb   =   Find< Rigidbody2DComponent >();", "rb"));
+    CHECK(AssignedFromFind("renderer = this->Find<SpriteComponent>();", "renderer"));
+
+    // And inside a real hook, which is where it actually lives.
+    CHECK(AssignedFromFind("void OnStart() {\n"
+                           "    invis = Find<Invisibility>();\n"
+                           "}\n",
+                           "invis"));
+}
+
+TEST_CASE("the declaration and ordinary uses are not an assignment from Find") {
+    // Holding one is the correct spelling, so it must never be reported.
+    CHECK(!AssignedFromFind("Invisibility invis;", "invis"));
+    CHECK(!AssignedFromFind("invis.Set(*Owner());", "invis"));
+    CHECK(!AssignedFromFind("invis->ToggleInvisibility();", "invis"));
+    CHECK(!AssignedFromFind("if (invis) { }", "invis"));
+
+    // A COMPARISON IS NOT AN ASSIGNMENT. `==` would otherwise read as `=`.
+    CHECK(!AssignedFromFind("if (invis == other) { }", "invis"));
+
+    // Assigned from something else entirely.
+    CHECK(!AssignedFromFind("invis = other;", "invis"));
+    CHECK(!AssignedFromFind("invis = {};", "invis"));
+}
+
+TEST_CASE("a function that merely starts with Find is not Find<>") {
+    // FindEntityWithTag returns an Entity*, and assigning one to a reference
+    // is a different mistake with a different message. The `<` is what makes
+    // it the templated Find, and the word boundary is what keeps somebody's
+    // own NearestFind out of it.
+    CHECK(!AssignedFromFind("target = FindEntityWithTag(\"Start\");", "target"));
+    CHECK(!AssignedFromFind("target = FindEntity(\"Start\");", "target"));
+    CHECK(!AssignedFromFind("target = MyFind<Thing>();", "target"));
+
+    // A longer member name that merely contains this one is not this one.
+    CHECK(!AssignedFromFind("invisCount = Find<Thing>();", "invis"));
+    CHECK(!AssignedFromFind("", "invis"));
+    CHECK(!AssignedFromFind("invis = Find<Thing>();", ""));
+}
+
+// ===========================================================================
+//  THE TWO LISTS THAT HAVE TO AGREE, and what each of these tests covers.
+//
+//  scene/ComponentAliases.h makes the bare name COMPILE as a reference;
+//  kTypeSpellings in this file's subject makes the Inspector DRAW it as one.
+//  A name in one and not the other is the drift to catch: the first test
+//  below checks the macro, the second checks the scan, and between them every
+//  component the engine ships is named explicitly in both directions.
+// ===========================================================================
+
+TEST_CASE("the alias macro names a ComponentRef for every component") {
+    // Alias-declarations are legal at function scope, so expanding the macro
+    // here checks it without leaking nineteen names into the rest of the file.
+    ENGINE_SCRIPT_COMPONENT_REFERENCES
+
+    static_assert(std::is_same_v<TransformComponent,
+                                 eng::ComponentRef<eng::TransformComponent>>);
+    static_assert(std::is_same_v<SpriteComponent,
+                                 eng::ComponentRef<eng::SpriteComponent>>);
+    static_assert(std::is_same_v<SpriteAnimationComponent,
+                                 eng::ComponentRef<eng::SpriteAnimationComponent>>);
+    static_assert(std::is_same_v<Rigidbody2DComponent,
+                                 eng::ComponentRef<eng::Rigidbody2DComponent>>);
+    static_assert(std::is_same_v<CameraComponent,
+                                 eng::ComponentRef<eng::CameraComponent>>);
+    static_assert(std::is_same_v<TilemapComponent,
+                                 eng::ComponentRef<eng::TilemapComponent>>);
+    static_assert(std::is_same_v<TilemapColliderComponent,
+                                 eng::ComponentRef<eng::TilemapColliderComponent>>);
+    static_assert(std::is_same_v<SpinComponent,
+                                 eng::ComponentRef<eng::SpinComponent>>);
+    static_assert(std::is_same_v<BoxColliderComponent,
+                                 eng::ComponentRef<eng::BoxColliderComponent>>);
+    static_assert(std::is_same_v<CircleColliderComponent,
+                                 eng::ComponentRef<eng::CircleColliderComponent>>);
+    static_assert(std::is_same_v<CapsuleColliderComponent,
+                                 eng::ComponentRef<eng::CapsuleColliderComponent>>);
+    static_assert(std::is_same_v<EdgeColliderComponent,
+                                 eng::ComponentRef<eng::EdgeColliderComponent>>);
+    static_assert(std::is_same_v<PolygonColliderComponent,
+                                 eng::ComponentRef<eng::PolygonColliderComponent>>);
+    static_assert(std::is_same_v<UIRectComponent,
+                                 eng::ComponentRef<eng::UIRectComponent>>);
+    static_assert(std::is_same_v<UIImageComponent,
+                                 eng::ComponentRef<eng::UIImageComponent>>);
+    static_assert(std::is_same_v<UITextComponent,
+                                 eng::ComponentRef<eng::UITextComponent>>);
+    static_assert(std::is_same_v<UIButtonComponent,
+                                 eng::ComponentRef<eng::UIButtonComponent>>);
+    static_assert(std::is_same_v<UISliderComponent,
+                                 eng::ComponentRef<eng::UISliderComponent>>);
+    static_assert(std::is_same_v<PlayerInputComponent,
+                                 eng::ComponentRef<eng::PlayerInputComponent>>);
+
+    // AND A LOOKUP UNWRAPS BACK TO THE COMPONENT, which is what makes
+    // `renderer = Find<SpriteComponent>();` compile at all.
+    static_assert(std::is_same_v<eng::FindTargetOf<SpriteComponent>::type,
+                                 eng::SpriteComponent>);
+    static_assert(std::is_same_v<eng::FindTargetOf<eng::SpriteComponent>::type,
+                                 eng::SpriteComponent>);
+
+    CHECK(true);   // the static_asserts above are the test
+}
+
+TEST_CASE("every component's bare name scans as a reference") {
+    // The other half: the scan has to agree with the macro, or the member
+    // compiles and the Inspector refuses to draw it.
+    struct Expected { const char* decl; const char* name; };
+    for (const Expected e : {
+             Expected{"    TransformComponent a;", "TransformComponent"},
+             Expected{"    SpriteComponent a;", "SpriteComponent"},
+             Expected{"    SpriteAnimationComponent a;", "SpriteAnimationComponent"},
+             Expected{"    Rigidbody2DComponent a;", "Rigidbody2DComponent"},
+             Expected{"    CameraComponent a;", "CameraComponent"},
+             Expected{"    TilemapComponent a;", "TilemapComponent"},
+             Expected{"    TilemapColliderComponent a;", "TilemapColliderComponent"},
+             Expected{"    SpinComponent a;", "SpinComponent"},
+             Expected{"    BoxColliderComponent a;", "BoxColliderComponent"},
+             Expected{"    CircleColliderComponent a;", "CircleColliderComponent"},
+             Expected{"    CapsuleColliderComponent a;", "CapsuleColliderComponent"},
+             Expected{"    EdgeColliderComponent a;", "EdgeColliderComponent"},
+             Expected{"    PolygonColliderComponent a;", "PolygonColliderComponent"},
+             Expected{"    UIRectComponent a;", "UIRectComponent"},
+             Expected{"    UIImageComponent a;", "UIImageComponent"},
+             Expected{"    UITextComponent a;", "UITextComponent"},
+             Expected{"    UIButtonComponent a;", "UIButtonComponent"},
+             Expected{"    UISliderComponent a;", "UISliderComponent"},
+             Expected{"    PlayerInputComponent a;", "PlayerInputComponent"},
+             // The SHORT spelling too, because it is a prefix of the long
+             // one and lives in the other half of kTypeSpellings - so this
+             // row and the one above it are what prove the prefix cannot
+             // swallow the longer name.
+             Expected{"    PlayerInput a;", "PlayerInputComponent"}}) {
+        const ScriptSourceInfo info = ScanScriptSource(Wrap(e.decl));
+        REQUIRE(Var(info, "a") != nullptr);
+        CHECK(Var(info, "a")->fieldType == ScriptFieldType::Entity);
+        CHECK(Var(info, "a")->requiredType == e.name);
+        CHECK(info.skipped.empty());
+    }
+}
+
+// ===========================================================================
+//  THE ONE SPELLING THE CHANGE BREAKS, and the only place that can name it.
+// ===========================================================================
+
+TEST_CASE("a bare component name with a star is reported") {
+    // `Rigidbody2DComponent* rb;` was a pointer to the component and is a
+    // pointer to a REFERENCE now. The compiler reports it at every USE, never
+    // at the declaration, and the member is usually private so the Inspector
+    // scan never sees it either.
+    const auto found = ComponentPointerDeclarations(
+        "class X { void OnStart() { rb = Find<Rigidbody2DComponent>(); }\n"
+        "private:\n"
+        "    Rigidbody2DComponent* rb;\n"
+        "};");
+
+    REQUIRE(found.size() == 1);
+    CHECK(found[0].typeName == "Rigidbody2DComponent");
+    CHECK(found[0].memberName == "rb");
+}
+
+TEST_CASE("the spacing of the star does not matter") {
+    for (const char* decl : {"    SpriteComponent* r;", "    SpriteComponent *r;",
+                             "    SpriteComponent * r;", "    SpriteComponent  *  r;"}) {
+        const auto found = ComponentPointerDeclarations(decl);
+        REQUIRE(found.size() == 1);
+        CHECK(found[0].typeName == "SpriteComponent");
+        CHECK(found[0].memberName == "r");
+    }
+}
+
+TEST_CASE("what is NOT a bare component pointer") {
+    // The QUALIFIED spelling is the class, so a star on it is an ordinary raw
+    // pointer and entirely correct - reporting it would be noise.
+    CHECK(ComponentPointerDeclarations("    eng::SpriteComponent* r;").empty());
+
+    // A reference held by value is the spelling we are steering people TO.
+    CHECK(ComponentPointerDeclarations("    SpriteComponent r;").empty());
+
+    // The short spellings were always references; a star on one was already
+    // wrong and is already reported by the pointer branch of the scan.
+    CHECK(ComponentPointerDeclarations("    SpriteRenderer* r;").empty());
+
+    // A longer name that merely ends with a component's name is not it.
+    CHECK(ComponentPointerDeclarations("    MySpriteComponent* r;").empty());
+
+    // And a star with no name after it is not a declaration.
+    CHECK(ComponentPointerDeclarations("    SpriteComponent*;").empty());
+    CHECK(ComponentPointerDeclarations("").empty());
+}
+
+TEST_CASE("several of them in one script are all reported") {
+    const auto found = ComponentPointerDeclarations(
+        "    SpriteComponent* a;\n"
+        "    Rigidbody2DComponent* b;\n"
+        "    eng::TilemapComponent* c;\n");   // qualified - correct, not reported
+
+    REQUIRE(found.size() == 2);
+    CHECK(found[0].memberName == "a");
+    CHECK(found[1].memberName == "b");
+}
+
+// ===========================================================================
+//  ActionHandlerDeclarations - which methods look like input action handlers.
+//
+//  THE SCANNER IS ALLOWED TO GUESS, which is why these cases look lenient.
+//  Everything it finds becomes a call wrapped in `if constexpr (requires
+//  ...)`, so a wrong guess compiles away instead of breaking a build. What it
+//  must NOT do is miss a real handler, or claim one of the engine's own
+//  fixed hooks.
+// ===========================================================================
+
+TEST_CASE("a method named after an action is found") {
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        class Player : public MyScriptBehaviour {
+        public:
+            void OnJump() { }
+            void OnMove(eng::Vec2 direction) { m_move = direction; }
+            void OnLean(float amount) { }
+        };
+    )");
+
+    REQUIRE(found.size() == 3);
+    CHECK(found[0] == "OnJump");
+    CHECK(found[1] == "OnMove");
+    CHECK(found[2] == "OnLean");
+}
+
+TEST_CASE("the engine's own hooks are not actions") {
+    // OnStart is not an action called "Start". Leaving these in would mean an
+    // action somebody named "Update" called the frame hook a second time.
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        class Thing : public MyScriptBehaviour {
+        public:
+            void OnStart() { }
+            void OnUpdate() { }
+            void OnFixedUpdate() { }
+            void OnDestroy() { }
+            void OnExpose(eng::ScriptVars& vars) { }
+            void OnTriggerEnter(eng::EntityId other) { }
+            void OnTriggerStay(eng::EntityId other) { }
+            void OnTriggerExit(eng::EntityId other) { }
+            void OnCollisionEnter(const eng::Collision2D& hit) { }
+            void OnCollisionStay(eng::EntityId other) { }
+            void OnCollisionExit(eng::EntityId other) { }
+            void OnEnable() { }
+            void OnDisable() { }
+        };
+    )");
+
+    CHECK(found.empty());
+}
+
+TEST_CASE("a capital after On is required, so ordinary words are not handlers") {
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        void Once() { }
+        void Only(int x) { }
+        void OnePerSecond() { }
+        void On() { }
+    )");
+
+    // "Once" would otherwise be a handler for an action called "ce".
+    CHECK(found.empty());
+}
+
+TEST_CASE("what is not a handler declaration at all") {
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        int OnJump();                  // not void
+        void OnJump;                   // no parameter list
+        auto f = [](){ OnFire(); };    // a CALL, with no void before it
+        OnReload();                    // likewise
+    )");
+
+    CHECK(found.empty());
+}
+
+TEST_CASE("a handler declared and then defined is one handler") {
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        class Gun : public MyScriptBehaviour {
+        public:
+            void OnFire();
+        };
+        void Gun::OnFire() { }
+    )");
+
+    REQUIRE(found.size() == 1);
+    CHECK(found[0] == "OnFire");
+}
+
+TEST_CASE("a guess that is wrong is harmless, and that is the design") {
+    // ALL THREE OF THESE ARE FOUND, and none of them is really a handler:
+    // one is private, one is in a comment, one takes something no action can
+    // supply. Each becomes a generated call guarded by `if constexpr
+    // (requires ...)`, which fails and compiles the call away - so being
+    // wrong here costs nothing, and that is precisely why the scanner is
+    // allowed to be this simple. ScriptVars.h states the rule it is obeying:
+    // generated code can never stop a script from compiling.
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        class Odd : public MyScriptBehaviour {
+        private:
+            void OnSecret() { }
+        public:
+            // void OnGhost() { }
+            void OnHit(eng::EntityId other) { }
+        };
+    )");
+
+    REQUIRE(found.size() == 3);
+    CHECK(found[0] == "OnSecret");
+    CHECK(found[1] == "OnGhost");
+    CHECK(found[2] == "OnHit");
+}
+
+TEST_CASE("spacing and qualifiers do not matter") {
+    const std::vector<std::string> found = ActionHandlerDeclarations(R"(
+        virtual void OnJump();
+        void    OnFire   ( ) { }
+        inline void OnMove(eng::Vec2 v) { }
+    )");
+
+    REQUIRE(found.size() == 3);
+    CHECK(found[0] == "OnJump");
+    CHECK(found[1] == "OnFire");
+    CHECK(found[2] == "OnMove");
+}
+
+// ===========================================================================
+//  ENGINE_SCRIPT_MAYBE_ACTIONS - who is allowed to be strict about a script
+//  that nothing would ever call.
+//
+//  A script whose only method is OnJump() has no lifecycle hook at all, and
+//  yet a Player Input really does call it - so the catch-all static_assert in
+//  ScriptHooks.h needs an escape hatch, and this macro is it. The header
+//  defaults it to TRUE on purpose: a fresh checkout, the game_scripts
+//  type-check, an IDE before the first build and the compile check behind the
+//  documentation's examples all parse a script with no generated file
+//  anywhere, so none of them knows the answer, and being strict on a guess
+//  refused code that was fine.
+//
+//  WHICH LEAVES THE GENERATOR AS THE ONLY PLACE THAT CAN SAY "false". The
+//  bracketing these cases pin is now the whole of what still makes the
+//  catch-all fire for a genuinely dead script: take it away and the assert
+//  silently stops refusing anything, with every other test in this suite
+//  still green.
+// ===========================================================================
+
+namespace {
+
+// The value in force where a body STARTS: the last #define at or before it,
+// which is what the compiler will have seen there. Checking by position and
+// not merely by presence is the point - a define that drifts below the body
+// it describes reads identically in a whole-file search and does nothing.
+std::string MaybeActionsAt(const std::string& unit, const std::string& realPath) {
+    const std::string marker = "#line 1 \"" + realPath + "\"";
+    const std::size_t body   = unit.find(marker);
+    REQUIRE(body != std::string::npos);
+
+    const std::string define = "#define ENGINE_SCRIPT_MAYBE_ACTIONS ";
+    const std::size_t at     = unit.rfind(define, body);
+    REQUIRE(at != std::string::npos);
+
+    const std::size_t from = at + define.size();
+    return unit.substr(from, unit.find('\n', from) - from);
+}
+
+} // namespace
+
+TEST_CASE("the generated unit is strict around a body with no handlers") {
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class Quiet final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(Quiet)
+    )");
+
+    const std::vector<ScriptUnitSource> sources{
+        UnitSource("Quiet", "class Quiet final : public eng::ScriptBehaviour {\n"
+                            "public:\n    void OnUpdate() {}\n};\n"),
+        UnitSource("Noisy", "class Noisy final : public eng::ScriptBehaviour {\n"
+                            "public:\n    void OnJump() {}\n};\n"),
+    };
+
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/p/.build/u.cpp");
+
+    // Quiet declares no handler, so the catch-all has to stay free to refuse
+    // it on the day somebody deletes its OnUpdate as well.
+    CHECK(MaybeActionsAt(unit, "C:/p/assets/scripts/Quiet.cpp") == "false");
+
+    // Noisy's ONLY method is a handler. Same unit, opposite answer - which is
+    // what resetting between bodies is for.
+    CHECK(MaybeActionsAt(unit, "C:/p/assets/scripts/Noisy.cpp") == "true");
+}
+
+TEST_CASE("the generated unit leaves the permissive answer behind it") {
+    // Everything past the last body - the registrars, the dispatchers, and
+    // whatever a later edit puts below them - is not a script body, so the
+    // value in force there should be the one the header would have given.
+    const ScriptSourceInfo info = ScanScriptSource(R"(
+        class Quiet final : public eng::ScriptBehaviour {
+        public:
+            void OnUpdate() {}
+        };
+        ENGINE_REGISTER_SCRIPT(Quiet)
+    )");
+
+    const std::vector<ScriptUnitSource> sources{
+        UnitSource("Quiet", "class Quiet final : public eng::ScriptBehaviour {\n"
+                            "public:\n    void OnUpdate() {}\n};\n"),
+    };
+
+    const std::string unit = GenerateScriptUnit(info, sources, "C:/p/.build/u.cpp");
+
+    const std::string define = "#define ENGINE_SCRIPT_MAYBE_ACTIONS ";
+    const std::size_t last   = unit.rfind(define);
+    REQUIRE(last != std::string::npos);
+    CHECK(unit.compare(last, define.size() + 4, define + "true") == 0);
+}
+
+TEST_CASE("a path with no generator assumes a script may have handlers") {
+    // COMPILED, not searched for, so the strict answer cannot come back by
+    // accident. This is the value a handler-only script is judged by in every
+    // build that has not run the generator, and `false` here is exactly what
+    // refused `class PauseMenu` whose one method was OnPause().
+    CHECK(ENGINE_SCRIPT_MAYBE_ACTIONS);
+}
+
+// ===========================================================================
+//  GameObject: the alias that used to be a pointer.
+//
+//  It was `typedef eng::Entity*`, so the exposer's pointer test rejected it
+//  and `GameObject target;` was a variable you could declare and never see.
+//  It is an eng::GameObjectRef now - a value - and these cases pin both the
+//  acceptance and the ONE exception it forced on the pointer test.
+// ===========================================================================
+
+TEST_CASE("a GameObject variable is exposed, and takes either kind of thing") {
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    GameObject target;"));
+
+    const ScriptVarDecl* var = Var(info, "target");
+    REQUIRE(var != nullptr);
+    CHECK(var->fieldType == ScriptFieldType::GameObject);
+
+    // NO CONSTRAINT, deliberately: the whole point is that it accepts a scene
+    // object or a prefab, so narrowing it to entities carrying some component
+    // would rule out half of what it is for.
+    CHECK(var->requiredType.empty());
+    CHECK(Skipped(info, "target") == nullptr);
+}
+
+TEST_CASE("the long spellings of GameObject are exposed too") {
+    SUBCASE("GameObjectRef") {
+        const ScriptSourceInfo info =
+            ScanScriptSource(Wrap("    GameObjectRef thing;"));
+        const ScriptVarDecl* var = Var(info, "thing");
+        REQUIRE(var != nullptr);
+        CHECK(var->fieldType == ScriptFieldType::GameObject);
+    }
+
+    SUBCASE("eng::GameObjectRef") {
+        const ScriptSourceInfo info =
+            ScanScriptSource(Wrap("    eng::GameObjectRef thing;"));
+        const ScriptVarDecl* var = Var(info, "thing");
+        REQUIRE(var != nullptr);
+        CHECK(var->fieldType == ScriptFieldType::GameObject);
+    }
+}
+
+TEST_CASE("GameObject = nullptr is a value, not a pointer") {
+    // ======================================================================
+    //  THE ONE EXCEPTION TO THE nullptr TEST, and the reason it is worth a
+    //  case of its own.
+    //
+    //  The exposer decides "this is a pointer" partly from `= nullptr`, on
+    //  the stated grounds that initialising from nullptr is the one thing a
+    //  value cannot do. GameObjectRef accepts nullptr ON PURPOSE, so that
+    //  every line written against the old pointer typedef goes on compiling -
+    //  which makes that premise false for exactly this type.
+    //
+    //  And this is the spelling somebody will write out of habit. Being told
+    //  it is a pointer and watching the field vanish from the Inspector is
+    //  the worst outcome available.
+    // ======================================================================
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    GameObject target = nullptr;"));
+
+    const ScriptVarDecl* var = Var(info, "target");
+    REQUIRE(var != nullptr);
+    CHECK(var->fieldType == ScriptFieldType::GameObject);
+
+    const ScriptVarSkipped* skipped = Skipped(info, "target");
+    CHECK(skipped == nullptr);
+}
+
+TEST_CASE("the nullptr test still works for everything that IS a pointer") {
+    // The exception above must not have widened into a hole. A real pointer
+    // initialised from nullptr is still a pointer, and still says so.
+    const ScriptSourceInfo info =
+        ScanScriptSource(Wrap("    eng::SpriteComponent* art = nullptr;"));
+
+    CHECK(Var(info, "art") == nullptr);
+
+    const ScriptVarSkipped* skipped = Skipped(info, "art");
+    REQUIRE(skipped != nullptr);
+    CHECK(skipped->reason.find("pointer") != std::string::npos);
+}
+
+TEST_CASE("a GameObject with a star is still a pointer") {
+    // `GameObject* p;` is a pointer TO the reference type, which is not a
+    // field - and the star is read before any of the value reasoning, so this
+    // is rejected for the ordinary reason rather than slipping through on the
+    // name.
+    const ScriptSourceInfo info = ScanScriptSource(Wrap("    GameObject* p;"));
+
+    CHECK(Var(info, "p") == nullptr);
+    REQUIRE(Skipped(info, "p") != nullptr);
 }

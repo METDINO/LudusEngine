@@ -83,15 +83,17 @@
 //  A COMPONENT ON THE SAME ENTITY. Ask for that where you use it -
 //  `Find<eng::Rigidbody2DComponent>()` - or cache the raw pointer in a
 //  private member, which is safe there for the reason it is not safe here:
-//  the cache and the behaviour object die together. assets/scripts has four
-//  of those and they are all correct.
+//  the cache and the behaviour object die together.
 //
-//  ANOTHER SCRIPT. A script class sits in an anonymous namespace in its own
-//  .cpp, so no other file can name the type - which is why FindScriptOn
-//  cannot live in EntityRef.h either, and why the worked example in
-//  assets/scripts/Bullet.cpp reaches a ScoreKeeper by message instead. Use
-//  eng::EntityRef with a `// [ScoreKeeper]` marker to get the slot, and
-//  FindScriptNamedIn or a eng::Message to do the talking.
+//  ANOTHER SCRIPT, which is a sibling mechanism and not this one:
+//  eng::ScriptRef<T>, in scene/ScriptRef.h. It could not be folded in here,
+//  and the reason is the include graph rather than a preference. Resolving a
+//  script ends in FindScriptOn<T>, which needs the COMPLETE ScriptBehaviour;
+//  that lives in scene/ScriptComponent.h, which includes this file's
+//  neighbour EntityRef.h and so cannot be included back. A component also
+//  carries T::kTypeName and a script class carries nothing of the kind, so
+//  the one line that makes this class worth having - taking the Inspector's
+//  constraint FROM the type - has no equivalent to share.
 // ============================================================================
 
 #include <engine/scene/Component.h>
@@ -172,12 +174,97 @@ public:
     // two are the same call.
     T* GetComponent() const { return EntityRef::Find<T>(); }
 
+    // ---- pointing it at something ---------------------------------------
+    //
+    //  ASSIGNED FROM WHAT A LOOKUP HANDS BACK, which is what makes
+    //
+    //      renderer = Find<SpriteComponent>();
+    //
+    //  mean the obvious thing, and is the other half of letting an engine
+    //  component be written exactly like a script. Find returns the
+    //  component; a component knows its entity; a reference travels as that
+    //  entity's NAME. So this reads "point at whoever owns this", and what
+    //  is stored afterwards re-resolves on every use like any other
+    //  reference rather than being a pointer that can go stale.
+    //
+    //  A NULL POINTER CLEARS IT rather than being kept. There is no name to
+    //  store, and a reference that silently held its previous target after
+    //  being assigned a failed lookup would be worse than one that is empty:
+    //  the next `if (ref)` would say yes and hand back the wrong component.
+    //  AND THE SAME THING AS A CONSTRUCTOR, because `X x = p;` is not `x = p;`.
+    //
+    //  COPY-INITIALISATION IS RESOLVED AGAINST CONSTRUCTORS and never reaches
+    //  an assignment operator, so with only the operator below,
+    //
+    //      TilemapComponent tilemap = entity->Find<TilemapComponent>();   // no
+    //      TilemapComponent tilemap;                                      // yes
+    //      tilemap = entity->Find<TilemapComponent>();
+    //
+    //  the one-line form was a hard error while the two-line form compiled -
+    //  and the message named ComponentRef<eng::TilemapComponent>, a type the
+    //  author never typed, on a line that reads perfectly. A reference that
+    //  can be assigned from a lookup but not INITIALISED from one is an
+    //  asymmetry with nothing behind it.
+    //
+    //  NOT `explicit`, deliberately: copy-initialisation is exactly the
+    //  spelling this exists to allow, and an explicit constructor would not
+    //  be considered for it.
+    //
+    //  The defaulted line is here because declaring ANY constructor suppresses
+    //  the implicit default one, and `TilemapComponent tilemap;` has to keep
+    //  working - it is how every Inspector slot is declared.
+    ComponentRef()            = default;
+    ComponentRef(T* component) { *this = component; }
+
+    ComponentRef& operator=(T* component) {
+        if (component != nullptr && component->Owner() != nullptr) {
+            EntityRef::Set(*component->Owner());
+        } else {
+            EntityRef::Clear();
+        }
+        return *this;
+    }
+
     Pointee* operator->() const { return Get(); }
 
     // `if (anchor)` - true only when it resolves right now, so it answers the
     // question callers actually have rather than "was something dropped on
     // it". Hides EntityRef's, which answers about the entity alone.
     explicit operator bool() const { return Get() != nullptr; }
+};
+
+// ===========================================================================
+//  A LOOKUP HANDED THIS REFERENCE IS ASKING FOR THE COMPONENT IT REFERS TO.
+//  See FindTargetOf in scene/Entity.h for why this lives here.
+// ===========================================================================
+template <class T>
+struct FindTargetOf<ComponentRef<T>> {
+    using type = T;
+};
+
+// ===========================================================================
+//  ComponentRef<ComponentRef<T>> IS ComponentRef<T>, exactly as the matching
+//  specialization in ScriptRef.h keeps the explicit script spelling working.
+//
+//  A bare component name is an alias for a reference to it now, so writing
+//  the explicit form with the UNQUALIFIED name - ComponentRef<SpriteComponent>
+//  - asks for ComponentRef<ComponentRef<...>>. Without this that is a hard
+//  error from the static_asserts above, on a line that was correct before and
+//  still reads correctly. The qualified eng::SpriteComponent is the class and
+//  needs none of this.
+//
+//  DERIVED RATHER THAN ALIASED, because a partial specialization cannot be an
+//  alias template. `using` re-exposes the pointer assignment, which the
+//  derived class's own implicit copy-assignment would otherwise hide.
+// ===========================================================================
+template <class T>
+class ComponentRef<ComponentRef<T>> : public ComponentRef<T> {
+public:
+    // Constructors are not inherited unless they are asked for, and without
+    // this the explicit spelling could be assigned from a lookup but not
+    // initialised from one - the same asymmetry the base just lost.
+    using ComponentRef<T>::ComponentRef;
+    using ComponentRef<T>::operator=;
 };
 
 } // namespace eng

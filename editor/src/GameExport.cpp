@@ -329,11 +329,12 @@ std::set<std::string> CollectReferencedAssets(const fs::path& assetsDir, int& ou
                                               int& outFromManifest) {
     std::set<std::string> needed;
 
-    // THE PLACEHOLDER IS ALWAYS PACKED. Nothing refers to it from any scene -
-    // the engine loads textures/missing.bmp by name when a sprite's own image
-    // will not load. Leave it out and the one thing whose job is to make a
-    // failure visible becomes a failure of its own.
-    AddPath("textures/missing.bmp", assetsDir, needed);
+    // THE PLACEHOLDER IS NOT PACKED, because it is not a file. The square
+    // shown for an image that will not load is built in code - see
+    // ResourceManager::MissingTexturePixels - so there
+    // is nothing here to add and nothing that can be left out by mistake.
+    // It used to be textures/missing.bmp, named here so that the one thing
+    // whose job is to make a failure visible did not become a failure itself.
 
     // THE BUILD LIST DECIDES WHAT SHIPS - see scene/BuildScenes.h and the
     // editor's Build panel.
@@ -673,10 +674,10 @@ GameExport::Result GameExport::ExportTo(const std::string& destination) {
     // library is current for exactly the same reasons it is current when you
     // alt-tab back into the editor.
     // ALWAYS, and into ONE library rather than the per-script ones the editor
-    // runs on. A shipped game will never recompile a script, so eleven
-    // libraries would be eleven import tables and eleven lots of load-time
-    // relocation for nothing. See ScriptBuild::BuildBundle - it links the
-    // objects the editor already compiled, so this is a link and not a
+    // runs on. A shipped game will never recompile a script, so a library
+    // per script would be an import table and a round of load-time
+    // relocation each, for nothing. See ScriptBuild::BuildBundle - it links
+    // the objects the editor already compiled, so this is a link and not a
     // rebuild.
     //
     // Not guarded by NeedsRebuild any more: the bundle is a different output

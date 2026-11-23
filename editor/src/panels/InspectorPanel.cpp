@@ -10,10 +10,14 @@
 #include "panels/InspectorPanel.h"
 
 #include "AssetDragDrop.h"
+#include "ColliderHandles.h"
 #include "EditorApp.h"
+#include "panels/FieldRow.h"         // row::, which puts a field's name on the left
 #include "panels/HierarchyPanel.h"   // kPayloadEntity, for dropping an entity on a reference
 #include "ScriptBuild.h"              // IsBuilding, for the NOT FOUND explanation
 #include "ShellOpen.h"
+#include "TileAssetEditor.h"   // a .otile, edited where every other asset is
+#include "TilePaint.h"   // the brush, the tools, and the tile preview
 
 #include <engine/render/Renderer.h>
 #include <engine/fs/FileSystem.h>   // ListDirectory, for the asset pickers
@@ -96,8 +100,8 @@ bool ContainsNoCase(std::string_view haystack, std::string_view needle) {
 }
 
 // Everything that could go in a slot of this kind. The same recursive shape
-// CollectTiles uses in the Tile Palette, and walked only while a picker is
-// open - never per frame.
+// CollectTiles uses (editor/src/TilePaint.h), and walked only while a picker
+// is open - never per frame.
 void CollectSlotCandidates(const std::string& directory, AssetSlotKind kind,
                            std::vector<std::string>& out) {
     std::vector<eng::FileSystem::DirEntry> entries;
@@ -148,6 +152,11 @@ bool DrawAssetSlot(const char* label, AssetSlotKind kind, const std::string& cur
 
     const std::string shown = AssetSlotName(current);
 
+    // THE NAME FIRST, in the same column every other field's name is in. A
+    // slot is a button drawn by hand rather than an ImGui widget with a
+    // label, so it places its own - see the note at the end of FieldRow.h.
+    row::Label(label);
+
     if (broken) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
     } else if (current.empty()) {
@@ -155,10 +164,10 @@ bool DrawAssetSlot(const char* label, AssetSlotKind kind, const std::string& cur
                               ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     }
 
-    // Sized like the drag boxes above it, so the column of fields lines up -
-    // and so there is a rectangle to drop onto rather than a word.
+    // Fills what the name left, so the column of fields lines up - and so
+    // there is a rectangle to drop onto rather than a word.
     const bool pick =
-        ImGui::Button(shown.c_str(), ImVec2(ImGui::CalcItemWidth(), 0.0f));
+        ImGui::Button(shown.c_str(), ImVec2(row::ValueWidth(), 0.0f));
 
     if (broken || current.empty()) {
         ImGui::PopStyleColor();
@@ -194,9 +203,6 @@ bool DrawAssetSlot(const char* label, AssetSlotKind kind, const std::string& cur
         ImGui::EndDragDropTarget();
     }
 
-    ImGui::SameLine();
-    ImGui::TextUnformatted(label);
-
     // ---- the picker, for when both ends are not on screen at once ---------
     //
     // The same reason the entity reference has one: dragging across a docked
@@ -215,7 +221,7 @@ bool DrawAssetSlot(const char* label, AssetSlotKind kind, const std::string& cur
                                 : "images, and the frames of any sliced sheet");
 
         ImGui::SetNextItemWidth(300.0f);
-        ImGui::InputTextWithHint("##filter", "type to narrow this down", filter,
+        row::InputTextWithHint("##filter", "type to narrow this down", filter,
                                  sizeof(filter));
         ImGui::Separator();
 
@@ -288,7 +294,7 @@ void DrawTransform(eng::TransformComponent& component, bool running) {
     // unpacked into one, edited, and packed back if it changed. Each of these
     // returns true only on a frame the value was actually changed.
     float position[2] = {transform.LocalPosition().x, transform.LocalPosition().y};
-    if (ImGui::DragFloat2("Position", position, 0.5f)) {
+    if (row::DragFloat2("Position", position, 0.5f)) {
         transform.SetLocalPosition(eng::Vec2{position[0], position[1]});
         EditorState::Get().MarkDirty();
     }
@@ -297,13 +303,13 @@ void DrawTransform(eng::TransformComponent& component, bool running) {
     // editor is degrees; every angle the engine holds is radians. The
     // conversion happens here, at the edge, exactly once.
     float degrees = transform.LocalRotation() * eng::kRadToDeg;
-    if (ImGui::DragFloat("Rotation", &degrees, 0.5f, -360.0f, 360.0f, "%.1f deg")) {
+    if (row::DragFloat("Rotation", &degrees, 0.5f, -360.0f, 360.0f, "%.1f deg")) {
         transform.SetLocalRotation(degrees * eng::kDegToRad);
         EditorState::Get().MarkDirty();
     }
 
     float scale[2] = {transform.LocalScale().x, transform.LocalScale().y};
-    if (ImGui::DragFloat2("Scale", scale, 0.01f)) {
+    if (row::DragFloat2("Scale", scale, 0.01f)) {
         transform.SetLocalScale(eng::Vec2{scale[0], scale[1]});
         EditorState::Get().MarkDirty();
     }
@@ -350,7 +356,7 @@ void DrawSprite(eng::SpriteComponent& sprite) {
     // bytes, because that is what an image editor shows you. Converted here.
     const eng::Color tint = sprite.Tint();
     float rgba[4] = {tint.r / 255.0f, tint.g / 255.0f, tint.b / 255.0f, tint.a / 255.0f};
-    if (ImGui::ColorEdit4("Tint", rgba)) {
+    if (row::ColorEdit4("Tint", rgba)) {
         sprite.SetTint(eng::Color{static_cast<unsigned char>(rgba[0] * 255.0f),
                                   static_cast<unsigned char>(rgba[1] * 255.0f),
                                   static_cast<unsigned char>(rgba[2] * 255.0f),
@@ -359,7 +365,7 @@ void DrawSprite(eng::SpriteComponent& sprite) {
     }
 
     int layer = sprite.Layer();
-    if (ImGui::DragInt("Draw order", &layer, 0.2f)) {
+    if (row::DragInt("Draw order", &layer, 0.2f)) {
         sprite.SetLayer(layer);
         EditorState::Get().MarkDirty();
     }
@@ -461,14 +467,14 @@ void DrawSpriteAnimation(eng::SpriteAnimationComponent& animation) {
 
     // ---- the two things that ARE this entity's own ------------------------
     float speed = animation.Speed();
-    if (ImGui::DragFloat("Speed", &speed, 0.01f, 0.05f, 20.0f, "%.2fx")) {
+    if (row::DragFloat("Speed", &speed, 0.01f, 0.05f, 20.0f, "%.2fx")) {
         animation.SetSpeed(speed);
         EditorState::Get().MarkDirty();
     }
     ImGui::TextDisabled("a multiplier on the sheet's rate, so 2 is twice as fast");
 
     bool playOnStart = animation.PlayOnStart();
-    if (ImGui::Checkbox("Play when the scene starts", &playOnStart)) {
+    if (row::Checkbox("Play when the scene starts", &playOnStart)) {
         animation.SetPlayOnStart(playOnStart);
         EditorState::Get().MarkDirty();
     }
@@ -591,8 +597,12 @@ void DrawPointList(T& collider, int maxPoints, int minPoints) {
     for (std::size_t i = 0; i < points.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
 
+        // 0.01 PER PIXEL OF MOUSE, not 0.5. These are fractions of the
+        // collider's scaled box now - the whole outline spans 1 - so the old
+        // speed moved a point half the shape's width per pixel dragged and
+        // nothing could be placed at all.
         float xy[2] = {points[i].x, points[i].y};
-        if (ImGui::DragFloat2("##point", xy, 0.5f)) {
+        if (row::DragFloat2("##point", xy, 0.01f)) {
             points[i] = eng::Vec2{xy[0], xy[1]};
             changed    = true;
         }
@@ -614,12 +624,14 @@ void DrawPointList(T& collider, int maxPoints, int minPoints) {
         // Two points in the same place have no direction between them, and a
         // shape with a zero-length edge is one the maths has to special-case.
         const eng::Vec2 last = points.empty() ? eng::Vec2{0.0f, 0.0f} : points.back();
-        points.push_back(last + eng::Vec2{8.0f, 0.0f});
+        points.push_back(last + eng::Vec2{0.25f, 0.0f});
         changed = true;
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%d of %d points (minimum %d)",
                         static_cast<int>(points.size()), maxPoints, minPoints);
+    ImGui::TextDisabled("in fractions of the scale above: -0.5 is its left edge, "
+                        "0.5 its right");
 
     if (changed) {
         collider.SetPoints(std::move(points));
@@ -637,7 +649,7 @@ void DrawRigidbody(eng::Rigidbody2DComponent& body) {
         case eng::RigidbodyType::Kinematic: type = 1; break;
         case eng::RigidbodyType::Static:    type = 2; break;
     }
-    if (ImGui::Combo("Body type", &type, "Dynamic\0Kinematic\0Static\0")) {
+    if (row::Combo("Body type", &type, "Dynamic\0Kinematic\0Static\0")) {
         body.SetBodyType(type == 0   ? eng::RigidbodyType::Dynamic
                          : type == 1 ? eng::RigidbodyType::Kinematic
                                      : eng::RigidbodyType::Static);
@@ -667,7 +679,7 @@ void DrawRigidbody(eng::Rigidbody2DComponent& body) {
     }
 
     bool autoMass = body.UseAutoMass();
-    if (ImGui::Checkbox("Auto mass", &autoMass)) {
+    if (row::Checkbox("Auto mass", &autoMass)) {
         body.SetUseAutoMass(autoMass);
         EditorState::Get().MarkDirty();
     }
@@ -678,7 +690,7 @@ void DrawRigidbody(eng::Rigidbody2DComponent& body) {
         ImGui::BeginDisabled();
     }
     float mass = body.Mass();
-    if (ImGui::DragFloat("Mass", &mass, 0.1f, 0.0001f, 100000.0f)) {
+    if (row::DragFloat("Mass", &mass, 0.1f, 0.0001f, 100000.0f)) {
         body.SetMass(mass);
         EditorState::Get().MarkDirty();
     }
@@ -688,26 +700,26 @@ void DrawRigidbody(eng::Rigidbody2DComponent& body) {
     }
 
     float gravityScale = body.GravityScale();
-    if (ImGui::DragFloat("Gravity scale", &gravityScale, 0.05f, -10.0f, 10.0f)) {
+    if (row::DragFloat("Gravity scale", &gravityScale, 0.05f, -10.0f, 10.0f)) {
         body.SetGravityScale(gravityScale);
         EditorState::Get().MarkDirty();
     }
     ImGui::TextDisabled("0 floats, 1 is normal, 2 falls twice as hard");
 
     float linearDrag = body.LinearDrag();
-    if (ImGui::DragFloat("Linear drag", &linearDrag, 0.05f, 0.0f, 100.0f)) {
+    if (row::DragFloat("Linear drag", &linearDrag, 0.05f, 0.0f, 100.0f)) {
         body.SetLinearDrag(linearDrag);
         EditorState::Get().MarkDirty();
     }
 
     float angularDrag = body.AngularDrag();
-    if (ImGui::DragFloat("Angular drag", &angularDrag, 0.01f, 0.0f, 100.0f)) {
+    if (row::DragFloat("Angular drag", &angularDrag, 0.01f, 0.0f, 100.0f)) {
         body.SetAngularDrag(angularDrag);
         EditorState::Get().MarkDirty();
     }
 
     bool freeze = body.FreezeRotation();
-    if (ImGui::Checkbox("Freeze rotation", &freeze)) {
+    if (row::Checkbox("Freeze rotation", &freeze)) {
         body.SetFreezeRotation(freeze);
         EditorState::Get().MarkDirty();
     }
@@ -732,25 +744,356 @@ void DrawRigidbody(eng::Rigidbody2DComponent& body) {
 // ---------------------------------------------------------------------------
 //  TilemapComponent
 //
-//  Deliberately NOT a cell editor. Cells are painted in the Scene view with
-//  the Tile Palette; a grid of numbers here would be a second, worse way of
-//  doing the same thing. What belongs here is everything ABOUT the map that
-//  is not a cell: how big a cell is, which layer it draws on, and which
-//  materials it uses.
-// ---------------------------------------------------------------------------
-void DrawTilemap(eng::TilemapComponent& map) {
-    ImGui::Text("%zu tile(s) in %zu chunk(s)", map.TileCount(), map.ChunkCount());
+//  Deliberately NOT a cell editor. Cells are painted in the SCENE VIEW, with
+//  the brush chosen below; a grid of numbers here would be a second, worse
+//  way of doing the same thing. What belongs here is everything ABOUT the map
+//  that is not a cell: how big a cell is, which layer it draws on, and - the
+//  part that used to be a window of its own - which materials it uses.
+// ===========================================================================
+//  THE TILE PALETTE, which used to be a window of its own.
+//
+//  IT LIVES HERE BECAUSE A PALETTE BELONGS TO A MAP. The old Tile Palette
+//  panel showed every .otile in the project to whichever map it had guessed
+//  you meant, which is wrong in both halves at once:
+//
+//    A MULTI-LAYER MAP DROWNS IN IT. Base, detail and collision layers are
+//    three tilemaps, and each wants a handful of materials - but one global
+//    grid cannot know which handful, so it offers all of them to all three
+//    and the one you want is somewhere in the pile.
+//
+//    AND THE MAP BEING PAINTED WAS A SECOND ANSWER to a question the editor
+//    had already answered. The panel kept its own target id, guessed one when
+//    it went stale, and could therefore be pointing somewhere other than the
+//    thing the Inspector was showing.
+//
+//  Both go away by putting the palette on the selected map. The list drawn
+//  here IS TilemapComponent::Palette() - the thing the scene file has always
+//  stored - so what you see is what the map uses, a tile enters it because
+//  somebody added it, and only the selected map can be painted at all.
+//
+//  ==========================================================================
+//  WHAT WENT WHERE, for anybody looking for a button that used to exist:
+//
+//    the tool row, the brush grid and the map statistics are all below;
+//    "Tidy palette" was the same thing as "Drop unused entries" and only one
+//    of them survived; the project-wide tile list is now behind "Add tile",
+//    which is the one place it still makes sense; and editing a .otile is in
+//    the Inspector's ASSET view - select the file in Assets.
+// ===========================================================================
+
+// The project's .otile files, for the Add popup only. Scanned on demand
+// rather than per frame: a disk walk per frame while a popup is open would be
+// a disk walk per frame, and tiles do not appear by themselves.
+struct TileChoices {
+    std::vector<std::string> paths;
+    bool                     scanned = false;
+    char                     filter[96] = {};
+
+    void Rescan() {
+        paths.clear();
+        CollectTiles("", paths);
+        std::sort(paths.begin(), paths.end());
+        scanned = true;
+    }
+
+    static TileChoices& Get() {
+        static TileChoices choices;
+        return choices;
+    }
+};
+
+void DrawTilemapToolRow() {
+    TilePaintState& state = TilePaintState::Get();
+
+    const TileTool tools[] = {TileTool::Select, TileTool::Paint, TileTool::Erase,
+                              TileTool::Rectangle, TileTool::Fill, TileTool::Pick};
+
+    for (std::size_t i = 0; i < std::size(tools); ++i) {
+        if (i != 0) {
+            ImGui::SameLine();
+        }
+        const bool active = (state.tool == tools[i]);
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        }
+        if (ImGui::Button(TileToolName(tools[i]))) {
+            state.tool = tools[i];
+        }
+        if (active) {
+            ImGui::PopStyleColor();
+        }
+    }
+
+    switch (state.tool) {
+        case TileTool::Select:
+            ImGui::TextDisabled("the Scene view behaves normally; pick a tool to paint");
+            break;
+        case TileTool::Paint:
+            ImGui::TextDisabled("left-drag paints, right-drag erases");
+            break;
+        case TileTool::Erase:
+            ImGui::TextDisabled("left-drag erases");
+            break;
+        case TileTool::Rectangle:
+            ImGui::TextDisabled("drag a box; right-drag clears one");
+            break;
+        case TileTool::Fill:
+            ImGui::TextDisabled("fills the connected area of whatever you click");
+            break;
+        case TileTool::Pick:
+            ImGui::TextDisabled("click a cell to make its tile the chosen one");
+            break;
+    }
+
+    ImGui::Checkbox("Show grid", &state.showGrid);
+    if (state.IsPainting()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Ctrl+Z undoes a whole stroke");
+    }
+}
+
+// What the last frame actually drew, and what the collider made of it. Both
+// answer "my tilemap is invisible" and "why is my floor two hundred boxes",
+// which is why they are worth the four lines.
+void DrawTilemapStats(eng::TilemapComponent& map) {
+    ImGui::Text("%zu tile(s) in %zu chunk(s), %zu material(s)", map.TileCount(),
+                map.ChunkCount(), map.Palette().size());
 
     eng::TileCoord lo{};
     eng::TileCoord hi{};
     if (map.TileBounds(lo, hi)) {
-        ImGui::TextDisabled("painted from (%d, %d) to (%d, %d)", lo.x, lo.y, hi.x, hi.y);
+        ImGui::TextDisabled("painted from (%d, %d) to (%d, %d)", lo.x, lo.y, hi.x,
+                            hi.y);
     } else {
-        ImGui::TextDisabled("nothing painted yet - use the Tile Palette");
+        ImGui::TextDisabled("nothing painted yet - add a tile below and pick a tool");
     }
 
+    ImGui::TextDisabled("last frame: %zu cell(s) drawn, %zu skipped",
+                        eng::TilemapRenderSystem::CellsDrawn(),
+                        eng::TilemapRenderSystem::CellsSkipped());
+
+    eng::Entity* owner = map.Owner();
+    if (owner == nullptr) {
+        return;
+    }
+    if (auto* collider = owner->Find<eng::TilemapColliderComponent>()) {
+        const std::size_t cells = collider->SolidCellCount();
+        const std::size_t boxes = collider->BoxCount();
+        if (boxes > 0) {
+            ImGui::TextDisabled(
+                "collider: %zu solid cell(s) merged into %zu box(es)  (%.0fx)", cells,
+                boxes, static_cast<double>(cells) / static_cast<double>(boxes));
+        } else {
+            ImGui::TextDisabled("collider: nothing solid yet");
+        }
+    } else {
+        ImGui::TextDisabled("no TilemapColliderComponent: nothing here is solid");
+    }
+}
+
+// Every .otile in the project, in a popup, so that the one place the global
+// list still exists is the one place it is actually wanted.
+void DrawAddTilePopup(eng::TilemapComponent& map) {
+    if (!ImGui::BeginPopup("addtile")) {
+        return;
+    }
+
+    TileChoices& choices = TileChoices::Get();
+    if (!choices.scanned) {
+        choices.Rescan();
+    }
+
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("##filter", "filter", choices.filter,
+                             sizeof(choices.filter));
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Rescan")) {
+        choices.Rescan();
+    }
+
+    if (choices.paths.empty()) {
+        ImGui::TextWrapped(
+            "No .otile files in this project. A tile is a .otile naming a sheet "
+            "that is ONE TILE WIDE and FIVE TILES TALL - see assets/tiles/stone.otile "
+            "for the smallest useful example.");
+        ImGui::EndPopup();
+        return;
+    }
+
+    std::string needle = choices.filter;
+    std::transform(needle.begin(), needle.end(), needle.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    ImGui::BeginChild("tilelist", ImVec2(320.0f, 260.0f), ImGuiChildFlags_Borders);
+    for (const std::string& path : choices.paths) {
+        if (!needle.empty()) {
+            std::string lower = path;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            if (lower.find(needle) == std::string::npos) {
+                continue;
+            }
+        }
+
+        // ALREADY IN IS SHOWN RATHER THAN HIDDEN, so that a tile you expected
+        // to find and cannot is a tile that is not in the project - one
+        // explanation instead of two.
+        const bool already = map.FindInPalette(path) != eng::kEmptyTile;
+        if (already) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::PushID(path.c_str());
+        if (const eng::TileAsset* asset = eng::TileLibrary::Load(path)) {
+            DrawTilePreview(*asset, 24.0f);
+            ImGui::SameLine();
+        }
+        if (ImGui::Selectable(path.c_str())) {
+            const eng::TileId id = map.AddToPalette(path);
+            if (id != eng::kEmptyTile) {
+                EditorState::Get().MarkDirty();
+
+                // Adding one is almost always followed by painting with it.
+                TilePaintState& state = TilePaintState::Get();
+                state.tilePath        = path;
+                if (state.tool == TileTool::Select) {
+                    state.tool = TileTool::Paint;
+                }
+                ImGui::CloseCurrentPopup();
+            } else {
+                ENGINE_LOG_ERROR(eng::Channels::kTilemap,
+                                 "'{}' was not added to the palette - the Console "
+                                 "says why it would not load",
+                                 path);
+            }
+        }
+        if (already) {
+            ImGui::SetItemTooltip("already in this map's palette");
+        }
+        ImGui::PopID();
+
+        if (already) {
+            ImGui::EndDisabled();
+        }
+    }
+    ImGui::EndChild();
+    ImGui::EndPopup();
+}
+
+// The map's own tiles, as a grid of thumbnails. Clicking one makes it the
+// brush; the chosen one carries a border.
+void DrawPaletteGrid(eng::TilemapComponent& map, eng::TileId& outRemove) {
+    TilePaintState& state = TilePaintState::Get();
+
+    const float preview   = 48.0f;
+    const float available = ImGui::GetContentRegionAvail().x;
+    const float step      = preview + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+    const int   perRow    = std::max(1, static_cast<int>(available / step));
+
+    int column = 0;
+    for (std::size_t i = 0; i < map.Palette().size(); ++i) {
+        const auto            id    = static_cast<eng::TileId>(i + 1);
+        const std::string&    path  = map.Palette()[i];
+        const eng::TileAsset* asset = map.AssetFor(id);
+
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::BeginGroup();
+
+        const bool chosen = (state.tilePath == path);
+        if (chosen) {
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.95f, 0.75f, 0.35f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+        }
+
+        if (asset != nullptr) {
+            // An invisible button OVER the preview, so the whole square is
+            // clickable rather than just a caption underneath it.
+            const ImVec2 corner = ImGui::GetCursorScreenPos();
+            DrawTilePreview(*asset, preview);
+            ImGui::SetCursorScreenPos(corner);
+            if (ImGui::InvisibleButton("##pick", ImVec2(preview, preview))) {
+                state.tilePath = path;
+                if (state.tool == TileTool::Select) {
+                    state.tool = TileTool::Paint;
+                }
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%zu. %s\n%dpx, %d frame(s), %s\ncollision: %s%s",
+                                  i + 1, path.c_str(), asset->TileSize(),
+                                  asset->FrameCount(),
+                                  eng::TileFrameModeName(asset->FrameMode()),
+                                  eng::TileCollisionName(asset->Collision()),
+                                  asset->IsConnector()
+                                      ? "\nconnector: invisible, but its neighbours "
+                                        "join through it"
+                                      : "");
+            }
+        } else {
+            // Named but not loadable. Said in red, because every cell using
+            // this entry is occupied as far as the map is concerned and
+            // invisible as far as the screen is - a confusing pair of symptoms
+            // to be left to work out.
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.15f, 0.15f, 1.0f));
+            if (ImGui::Button("ERR", ImVec2(preview, preview))) {
+                state.tilePath = path;
+            }
+            ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("%zu. %s\nWILL NOT LOAD - the Console says why",
+                                  i + 1, path.c_str());
+        }
+
+        if (chosen) {
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+        }
+
+        // THE REMOVE IS ON THE TILE ITSELF, through its right-click menu,
+        // rather than on a row of buttons underneath: there is one of these
+        // per entry already, and "which one did that button mean" is the
+        // question a separate button would raise.
+        if (ImGui::BeginPopupContextItem("tilemenu")) {
+            ImGui::TextDisabled("%s", path.c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Use as brush")) {
+                state.tilePath = path;
+                if (state.tool == TileTool::Select) {
+                    state.tool = TileTool::Paint;
+                }
+            }
+            if (ImGui::MenuItem("Edit this tile")) {
+                EditorState::Get().selectedAsset = path;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Remove from this map")) {
+                outRemove = id;
+            }
+            ImGui::EndPopup();
+        }
+
+        const std::string name = TileShortName(path);
+        ImGui::TextDisabled("%.9s", name.c_str());
+
+        ImGui::EndGroup();
+        ImGui::PopID();
+
+        if (++column % perRow != 0) {
+            ImGui::SameLine();
+        }
+    }
+    ImGui::NewLine();
+}
+
+// ---------------------------------------------------------------------------
+//  The Tilemap component's own fields, and then its palette.
+// ---------------------------------------------------------------------------
+void DrawTilemap(eng::TilemapComponent& map) {
+    DrawTilemapStats(map);
+
     int layer = map.Layer();
-    if (ImGui::DragInt("Layer", &layer, 0.2f, -1000, 1000)) {
+    if (row::DragInt("Layer", &layer, 0.2f, -1000, 1000)) {
         map.SetLayer(layer);
         EditorState::Get().MarkDirty();
     }
@@ -759,7 +1102,7 @@ void DrawTilemap(eng::TilemapComponent& map) {
     eng::Color    tint = map.Tint();
     float         rgba[4] = {tint.r / 255.0f, tint.g / 255.0f, tint.b / 255.0f,
                              tint.a / 255.0f};
-    if (ImGui::ColorEdit4("Tint", rgba)) {
+    if (row::ColorEdit4("Tint", rgba)) {
         map.SetTint(eng::Color{static_cast<unsigned char>(rgba[0] * 255.0f),
                                static_cast<unsigned char>(rgba[1] * 255.0f),
                                static_cast<unsigned char>(rgba[2] * 255.0f),
@@ -771,7 +1114,7 @@ void DrawTilemap(eng::TilemapComponent& map) {
     const eng::Vec2 cellSize = map.CellSize();
     bool            explicitSize = map.HasExplicitCellSize();
 
-    if (ImGui::Checkbox("Set cell size by hand", &explicitSize)) {
+    if (row::Checkbox("Set cell size by hand", &explicitSize)) {
         // Unticking goes back to the tile's own size, which is what a map
         // drawn at the size its art was drawn at wants.
         map.SetCellSize(explicitSize ? cellSize : eng::Vec2{0.0f, 0.0f});
@@ -780,7 +1123,7 @@ void DrawTilemap(eng::TilemapComponent& map) {
 
     if (map.HasExplicitCellSize()) {
         float size[2] = {cellSize.x, cellSize.y};
-        if (ImGui::DragFloat2("Cell size", size, 0.5f, 1.0f, 4096.0f)) {
+        if (row::DragFloat2("Cell size", size, 0.5f, 1.0f, 4096.0f)) {
             map.SetCellSize(eng::Vec2{size[0], size[1]});
             EditorState::Get().MarkDirty();
         }
@@ -790,48 +1133,48 @@ void DrawTilemap(eng::TilemapComponent& map) {
         ImGui::TextDisabled("taken from the first tile in the palette");
     }
 
-    // ---- the palette -------------------------------------------------------
-    ImGui::SeparatorText("Palette");
-    ImGui::TextDisabled("a cell stores a position in this list, not a path");
+    // ======================================================================
+    //  The palette
+    // ======================================================================
+    ImGui::SeparatorText("Tile Palette");
+
+    DrawTilemapToolRow();
+    ImGui::Separator();
 
     if (map.Palette().empty()) {
-        ImGui::TextDisabled("empty - painting adds to it");
+        ImGui::TextWrapped(
+            "This map has no tiles yet. Add one and it becomes a material this map "
+            "can paint - a cell stores a POSITION in this list, not a path, which "
+            "is why the list is the map's own and not the project's.");
     }
 
-    for (std::size_t i = 0; i < map.Palette().size(); ++i) {
-        const std::string&    path  = map.Palette()[i];
-        const eng::TileAsset* asset = map.AssetFor(static_cast<eng::TileId>(i + 1));
+    // The id to take out, decided inside the grid and acted on after it, so
+    // that nothing mutates the palette while the loop is walking it.
+    eng::TileId remove = eng::kEmptyTile;
+    DrawPaletteGrid(map, remove);
 
-        ImGui::PushID(static_cast<int>(i));
-        if (asset != nullptr) {
-            ImGui::Text("%zu. %s", i + 1, path.c_str());
-            ImGui::SameLine();
-            ImGui::TextDisabled("(%dpx%s%s)", asset->TileSize(),
-                                asset->IsSolid() ? ", solid" : "",
-                                asset->IsConnector() ? ", connector" : "");
-        } else {
-            // Named but not loadable. Said in red, because every cell using
-            // this entry is occupied as far as the map is concerned and
-            // invisible as far as the screen is - which is a confusing pair of
-            // symptoms to be left to work out.
-            ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
-                               "%zu. %s  - WILL NOT LOAD", i + 1, path.c_str());
-        }
-        ImGui::PopID();
+    if (ImGui::Button("Add tile...")) {
+        ImGui::OpenPopup("addtile");
     }
+    ImGui::SetItemTooltip("every .otile in the project; only what you add is "
+                          "offered by the brush");
+    DrawAddTilePopup(map);
 
     if (!map.Palette().empty()) {
-        if (ImGui::Button("Drop unused entries")) {
+        ImGui::SameLine();
+        if (ImGui::Button("Drop unused")) {
             const std::size_t dropped = map.CompactPalette();
             EditorState::Get().MarkDirty();
             ENGINE_LOG_INFO(eng::Channels::kTilemap,
                             "tilemap palette compacted: {} entr{} dropped", dropped,
                             dropped == 1 ? "y" : "ies");
         }
+        ImGui::SetItemTooltip("takes out every entry no cell uses any more");
+
         ImGui::SameLine();
         if (ImGui::Button("Reload tiles")) {
-            // Re-reads every .otile the map uses, so editing one in a text
-            // editor and coming back shows the change.
+            // Re-reads every .otile the map uses, so editing one and coming
+            // back shows the change.
             for (const std::string& path : map.Palette()) {
                 std::string error;
                 if (!eng::TileLibrary::Reload(path, error)) {
@@ -852,12 +1195,6 @@ void DrawTilemap(eng::TilemapComponent& map) {
             //  changed from "collision": "None" to "Grid" left every cell
             //  using it walk-through - and the reverse left a field of
             //  invisible walls.
-            //
-            //  TilemapCollider.h documents Invalidate() as existing for
-            //  precisely this: "the editor calls it after a .otile is
-            //  edited, because a tile changing from decoration to solid
-            //  changes which cells are solid without any cell changing."
-            //  Nothing called it.
             // ==========================================================
             if (eng::Entity* owner = map.Owner(); owner != nullptr) {
                 if (auto* solid = owner->Find<eng::TilemapColliderComponent>()) {
@@ -865,6 +1202,54 @@ void DrawTilemap(eng::TilemapComponent& map) {
                 }
             }
         }
+    }
+
+    // ---- removing one ------------------------------------------------------
+    //
+    //  TWO STEPS, because the answer depends on what is painted. An entry
+    //  nothing uses goes straight away; one that is painted asks first, and
+    //  says how many cells it is about to erase. RemoveFromPalette refuses
+    //  outright without the second argument, so a missed confirmation is a
+    //  no-op rather than a quiet deletion.
+    static eng::TileId pending      = eng::kEmptyTile;
+    static std::size_t pendingCells = 0;
+
+    if (remove != eng::kEmptyTile) {
+        const std::size_t cells = map.CellsUsing(remove);
+        if (cells == 0) {
+            if (map.RemoveFromPalette(remove, false)) {
+                EditorState::Get().MarkDirty();
+            }
+        } else {
+            pending      = remove;
+            pendingCells = cells;
+            ImGui::OpenPopup("confirmremovetile");
+        }
+    }
+
+    if (ImGui::BeginPopupModal("confirmremovetile", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("%zu cell(s) still use this tile.", pendingCells);
+        ImGui::TextWrapped("Removing it erases them and renumbers the entries after "
+                           "it. Ctrl+Z will bring them back.");
+        if (ImGui::Button("Remove and erase")) {
+            if (map.RemoveFromPalette(pending, true)) {
+                EditorState::Get().MarkDirty();
+                if (eng::Entity* owner = map.Owner(); owner != nullptr) {
+                    if (auto* solid = owner->Find<eng::TilemapColliderComponent>()) {
+                        solid->Invalidate();
+                    }
+                }
+            }
+            pending = eng::kEmptyTile;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            pending = eng::kEmptyTile;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     ImGui::SeparatorText("Danger");
@@ -896,7 +1281,7 @@ void DrawTilemap(eng::TilemapComponent& map) {
 
 void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
     bool enabled = collider.Enabled();
-    if (ImGui::Checkbox("Enabled", &enabled)) {
+    if (row::Checkbox("Enabled", &enabled)) {
         collider.SetEnabled(enabled);
         EditorState::Get().MarkDirty();
     }
@@ -905,7 +1290,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
                         "pushing, invisible to queries)");
 
     bool trigger = collider.IsTrigger();
-    if (ImGui::Checkbox("Trigger", &trigger)) {
+    if (row::Checkbox("Trigger", &trigger)) {
         collider.SetTrigger(trigger);
         EditorState::Get().MarkDirty();
     }
@@ -921,24 +1306,79 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
     }
 
     float offset[2] = {collider.Offset().x, collider.Offset().y};
-    if (ImGui::DragFloat2("Offset", offset, 0.5f)) {
+    if (row::DragFloat2("Offset", offset, 0.5f)) {
         collider.SetOffset(eng::Vec2{offset[0], offset[1]});
         EditorState::Get().MarkDirty();
+    }
+
+    // =======================================================================
+    //  THE SWITCH FOR THE SCENE VIEW'S HANDLES.
+    //
+    //  ON THE COLLIDER rather than in a toolbar, because that is what it is
+    //  about - and because two colliders on one entity each need their own
+    //  answer. See ColliderHandles.h for why it is a mode at all instead of
+    //  being on whenever something is selected.
+    // =======================================================================
+    if (collider.Shape() != eng::ColliderShape::Tilemap) {
+        const bool editing = ColliderEdit::Get().IsEditing(collider);
+        if (ImGui::Button(editing ? "Done editing shape" : "Edit shape",
+                          ImVec2(150, 0))) {
+            ColliderEdit::Get().Toggle(collider);
+        }
+        ImGui::SameLine();
+        if (editing) {
+            ImGui::TextDisabled("drag the yellow handles in the Scene view");
+        } else {
+            ImGui::TextDisabled("(drag this shape in the Scene view)");
+        }
+    }
+
+    // =======================================================================
+    //  THE SIZE, FOR EVERY SHAPE, IN ONE ROW.
+    //
+    //  A tilemap collider is the exception and gets no row at all: it has no
+    //  shape of its own, it IS the TilemapComponent beside it, so a size
+    //  there would be a control that does nothing.
+    //
+    //  THE PIXELS ARE SHOWN BESIDE IT rather than being the thing typed. A
+    //  fraction is the right thing to author and the wrong thing to have to
+    //  do arithmetic on, so the arithmetic is done here: drag 0.5 and read
+    //  "12 x 48 px" without working out what half of the sprite is.
+    // =======================================================================
+    if (collider.Shape() != eng::ColliderShape::Tilemap) {
+        float scale[2] = {collider.Scale().x, collider.Scale().y};
+        if (row::DragFloat2("Scale", scale, 0.01f, 0.0f, 1000.0f)) {
+            collider.SetScale(eng::Vec2{scale[0], scale[1]});
+            EditorState::Get().MarkDirty();
+        }
+
+        const eng::Vec2 reference = collider.ReferenceSize();
+        const eng::Vec2 pixels    = collider.ScaledSize();
+        ImGui::TextDisabled("= %.0f x %.0f px", static_cast<double>(pixels.x),
+                            static_cast<double>(pixels.y));
+        ImGui::SameLine();
+
+        // NAMES WHAT IT IS A FRACTION OF, because "1" meaning two different
+        // sizes on two entities is exactly the confusion this row could
+        // otherwise cause. The sprite when there is one, one world unit when
+        // there is not.
+        const bool hasSprite =
+            collider.Owner() != nullptr &&
+            collider.Owner()->Find<eng::SpriteComponent>() != nullptr &&
+            collider.Owner()->Find<eng::SpriteComponent>()->RenderedSize().x > 0.0f;
+        ImGui::TextDisabled(hasSprite ? "(1 = the sprite, %.0f x %.0f)"
+                                      : "(no sprite, so 1 = one world unit, %.0f x %.0f)",
+                            static_cast<double>(reference.x),
+                            static_cast<double>(reference.y));
     }
 
 // The shape-specific fields. Which ones depend on what this actually is.
     switch (collider.Shape()) {
         case eng::ColliderShape::Box: {
             auto& box = static_cast<eng::BoxColliderComponent&>(collider);
-            float half[2] = {box.HalfExtents().x, box.HalfExtents().y};
-            if (ImGui::DragFloat2("Half size", half, 0.5f, 0.0f, 10000.0f)) {
-                box.SetHalfExtents(eng::Vec2{half[0], half[1]});
-                EditorState::Get().MarkDirty();
-            }
-            ImGui::TextDisabled("half the width and half the height");
 
             float edge = box.EdgeRadius();
-            if (ImGui::DragFloat("Edge radius", &edge, 0.1f, 0.0f, 1000.0f)) {
+            if (row::DragFloat("Edge radius", &edge, 0.1f, 0.0f, 1000.0f)) {
                 box.SetEdgeRadius(edge);
                 EditorState::Get().MarkDirty();
             }
@@ -949,24 +1389,24 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
 
         case eng::ColliderShape::Circle: {
             auto& circle = static_cast<eng::CircleColliderComponent&>(collider);
-            float radius = circle.Radius();
-            if (ImGui::DragFloat("Radius", &radius, 0.5f, 0.0f, 10000.0f)) {
-                circle.SetRadius(radius);
-                EditorState::Get().MarkDirty();
-            }
+
+            // SHOWN, NOT TYPED. The scale row above is the size; a radius
+            // field beside it would be a second control for the same number,
+            // and the two would disagree the moment the sprite was resized.
+            // What a circle does need said is that it cannot honour a
+            // non-square scale, because there is no ellipse test - so the
+            // number it actually used is worth printing.
+            ImGui::TextDisabled("radius %.1f px - the LARGER axis wins, because a "
+                                "circle cannot be an ellipse",
+                                static_cast<double>(circle.Radius()));
             break;
         }
 
         case eng::ColliderShape::Capsule: {
             auto& capsule = static_cast<eng::CapsuleColliderComponent&>(collider);
-            float size[2] = {capsule.Size().x, capsule.Size().y};
-            if (ImGui::DragFloat2("Size", size, 0.5f, 0.0f, 10000.0f)) {
-                capsule.SetSize(eng::Vec2{size[0], size[1]});
-                EditorState::Get().MarkDirty();
-            }
 
             int direction = capsule.Direction() == eng::CapsuleDirection::Vertical ? 0 : 1;
-            if (ImGui::Combo("Direction", &direction, "Vertical\0Horizontal\0")) {
+            if (row::Combo("Direction", &direction, "Vertical\0Horizontal\0")) {
                 capsule.SetDirection(direction == 0 ? eng::CapsuleDirection::Vertical
                                                     : eng::CapsuleDirection::Horizontal);
                 EditorState::Get().MarkDirty();
@@ -1033,7 +1473,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
             DrawPointList(edge, eng::EdgeColliderComponent::kMaxEdgePoints, 2);
 
             float radius = edge.EdgeRadius();
-            if (ImGui::DragFloat("Edge radius", &radius, 0.1f, 0.0f, 1000.0f)) {
+            if (row::DragFloat("Edge radius", &radius, 0.1f, 0.0f, 1000.0f)) {
                 edge.SetEdgeRadius(radius);
                 EditorState::Get().MarkDirty();
             }
@@ -1041,7 +1481,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
             ImGui::TextDisabled("(gives the line thickness)");
 
             bool loop = edge.Loop();
-            if (ImGui::Checkbox("Loop", &loop)) {
+            if (row::Checkbox("Loop", &loop)) {
                 edge.SetLoop(loop);
                 EditorState::Get().MarkDirty();
             }
@@ -1056,12 +1496,12 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
     eng::PhysicsMaterial2D material = collider.Material();
     bool                   materialChanged = false;
 
-    materialChanged |= ImGui::DragFloat("Friction", &material.friction, 0.01f, 0.0f, 2.0f);
+    materialChanged |= row::DragFloat("Friction", &material.friction, 0.01f, 0.0f, 2.0f);
     ImGui::SameLine();
     ImGui::TextDisabled("(0 is ice)");
 
     materialChanged |=
-        ImGui::DragFloat("Bounciness", &material.bounciness, 0.01f, 0.0f, 1.0f);
+        row::DragFloat("Bounciness", &material.bounciness, 0.01f, 0.0f, 1.0f);
     ImGui::SameLine();
     ImGui::TextDisabled("(0 is a beanbag, 1 a superball)");
 
@@ -1071,7 +1511,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
     }
 
     float density = collider.Density();
-    if (ImGui::DragFloat("Density", &density, 0.05f, 0.0001f, 1000.0f)) {
+    if (row::DragFloat("Density", &density, 0.05f, 0.0001f, 1000.0f)) {
         collider.SetDensity(density);
         EditorState::Get().MarkDirty();
     }
@@ -1090,7 +1530,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
 
     char layer[64];
     std::snprintf(layer, sizeof(layer), "%s", collider.Layer().c_str());
-    if (ImGui::InputText("Layer (what it is)", layer, sizeof(layer),
+    if (row::InputText("Layer (what it is)", layer, sizeof(layer),
                          ImGuiInputTextFlags_EnterReturnsTrue)) {
         collider.SetLayer(layer);
         EditorState::Get().MarkDirty();
@@ -1103,6 +1543,17 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
 
     std::vector<std::string> wanted = collider.CollidesWith();
     bool changed = false;
+
+    // ======================================================================
+    //  THE ONE BLOCK THAT IS NOT A COLUMN OF ROWS, so it is the one block
+    //  that does not use row:: - see FieldRow.h.
+    //
+    //  These are a GRID of tick boxes, three to a line, under a heading that
+    //  names them all at once. A row:: checkbox puts its name in the label
+    //  column and its box at the value column, which is right for a property
+    //  and wrong for a set of choices: every box would be on a line of its
+    //  own, and twelve layers would be twelve rows where there are four.
+    // ======================================================================
 
     // "All" is a special entry meaning "everything". When it is ticked the
     // individual boxes are irrelevant, so they are greyed out.
@@ -1127,7 +1578,7 @@ void DrawCollider(eng::ColliderComponent& collider, eng::Scene& scene) {
         // label apart. See the note about widget identity in Panel.h.
         char id[96];
         std::snprintf(id, sizeof(id), "%s##collideswith", name.c_str());
-        if (ImGui::Checkbox(id, &on)) {
+        if (ImGui::Checkbox(id, &on)) {   // the grid, not a row - see above
             if (on) {
                 wanted.push_back(name);
             } else {
@@ -1171,20 +1622,58 @@ void DrawCamera(eng::CameraComponent& camera) {
                            active->Priority(), camera.Priority());
     }
 
-    float zoom = camera.Zoom();
-    ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::DragFloat("Zoom", &zoom, 0.01f, 0.01f, 50.0f, "%.2fx")) {
-        camera.SetZoom(zoom);
-        EditorState::Get().MarkDirty();
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Bigger is closer in. This is the game's zoom - the Scene "
-                          "view has its own and is not affected.");
+    // =======================================================================
+    //  ZOOM OR FRAME HEIGHT - the same choice the Game view offers, on the
+    //  component that travels with the scene. A frame height of 0 means this
+    //  camera is framed by zoom, which is every camera written before the
+    //  option existed. See scene/CameraComponent.h.
+    // =======================================================================
+    const bool byHeight = camera.FrameHeight() > 0.0f;
+
+    if (byHeight) {
+        float height = camera.FrameHeight();
+        ImGui::SetNextItemWidth(160.0f);
+        if (row::DragFloat("Frame height", &height, 1.0f, 1.0f, 100000.0f,
+                           "%.0f units")) {
+            camera.SetFrameHeight(height);
+            EditorState::Get().MarkDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("How much world is visible top to bottom, whatever "
+                              "resolution it is played at. The width follows the "
+                              "aspect ratio.\n\nThis is the one to ship with: a zoom "
+                              "lets a bigger screen see more of the level.");
+        }
+        if (ImGui::SmallButton("frame by zoom instead")) {
+            camera.SetFrameHeight(0.0f);
+            EditorState::Get().MarkDirty();
+        }
+    } else {
+        float zoom = camera.Zoom();
+        ImGui::SetNextItemWidth(160.0f);
+        if (row::DragFloat("Zoom", &zoom, 0.01f, 0.01f, 50.0f, "%.2fx")) {
+            camera.SetZoom(zoom);
+            EditorState::Get().MarkDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Bigger is closer in. This is the game's zoom - the "
+                              "Scene view has its own and is not affected.\n\nA "
+                              "BIGGER SCREEN SHOWS MORE WORLD with a zoom, so every "
+                              "player sees a different amount of the level.");
+        }
+        if (ImGui::SmallButton("frame by height instead")) {
+            // THE SHOT IS KEPT. The live camera already knows what height
+            // this zoom works out to at the current viewport, so asking it is
+            // better than recomputing - and better than picking a round
+            // number that moves the framing.
+            camera.SetFrameHeight(eng::Engine::Get().GetCamera().FrameHeight());
+            EditorState::Get().MarkDirty();
+        }
     }
 
     int priority = camera.Priority();
     ImGui::SetNextItemWidth(160.0f);
-    if (ImGui::DragInt("Priority", &priority, 0.2f)) {
+    if (row::DragInt("Priority", &priority, 0.2f)) {
         camera.SetPriority(priority);
         EditorState::Get().MarkDirty();
     }
@@ -1194,7 +1683,7 @@ void DrawCamera(eng::CameraComponent& camera) {
     }
 
     bool enabled = camera.Enabled();
-    if (ImGui::Checkbox("Enabled", &enabled)) {
+    if (row::Checkbox("Enabled", &enabled)) {
         camera.SetEnabled(enabled);
         EditorState::Get().MarkDirty();
     }
@@ -1220,7 +1709,7 @@ void DrawCamera(eng::CameraComponent& camera) {
 bool DrawColorField(const char* label, eng::Color& color) {
     float rgba[4] = {color.r / 255.0f, color.g / 255.0f, color.b / 255.0f,
                      color.a / 255.0f};
-    if (!ImGui::ColorEdit4(label, rgba, ImGuiColorEditFlags_AlphaBar)) {
+    if (!row::ColorEdit4(label, rgba, ImGuiColorEditFlags_AlphaBar)) {
         return false;
     }
     const auto channel = [](float v) {
@@ -1238,7 +1727,7 @@ void DrawUIRect(eng::UIRectComponent& rect) {
 
     // ---- which space ------------------------------------------------------
     int space = (rect.space == eng::UISpace::World) ? 1 : 0;
-    if (ImGui::Combo("Space", &space, "Screen\0World\0")) {
+    if (row::Combo("Space", &space, "Screen\0World\0")) {
         rect.space = (space == 1) ? eng::UISpace::World : eng::UISpace::Screen;
         changed    = true;
     }
@@ -1257,7 +1746,7 @@ void DrawUIRect(eng::UIRectComponent& rect) {
     // nothing; one that is visibly unavailable says it does not apply.
     ImGui::BeginDisabled(rect.space == eng::UISpace::World);
     int anchor = static_cast<int>(rect.anchor);
-    if (ImGui::Combo("Anchor", &anchor,
+    if (row::Combo("Anchor", &anchor,
                      "TopLeft\0Top\0TopRight\0Left\0Center\0Right\0"
                      "BottomLeft\0Bottom\0BottomRight\0")) {
         rect.anchor = static_cast<eng::UIAnchor>(anchor);
@@ -1265,20 +1754,20 @@ void DrawUIRect(eng::UIRectComponent& rect) {
     }
 
     float offset[2] = {rect.offset.x, rect.offset.y};
-    if (ImGui::DragFloat2("Offset", offset, 1.0f)) {
+    if (row::DragFloat2("Offset", offset, 1.0f)) {
         rect.offset = eng::Vec2{offset[0], offset[1]};
         changed     = true;
     }
     ImGui::EndDisabled();
 
     float size[2] = {rect.size.x, rect.size.y};
-    if (ImGui::DragFloat2("Size", size, 1.0f, 1.0f, 4096.0f)) {
+    if (row::DragFloat2("Size", size, 1.0f, 1.0f, 4096.0f)) {
         rect.size = eng::Vec2{size[0], size[1]};
         changed   = true;
     }
 
     float pivot[2] = {rect.pivot.x, rect.pivot.y};
-    if (ImGui::DragFloat2("Pivot", pivot, 0.01f, 0.0f, 1.0f)) {
+    if (row::DragFloat2("Pivot", pivot, 0.01f, 0.0f, 1.0f)) {
         rect.pivot = eng::Vec2{pivot[0], pivot[1]};
         changed    = true;
     }
@@ -1287,14 +1776,14 @@ void DrawUIRect(eng::UIRectComponent& rect) {
                           "0,0 is its top-left corner and 0.5,0.5 its middle.");
     }
 
-    if (ImGui::DragInt("Sort order", &rect.sortOrder, 0.1f, -100, 100)) {
+    if (row::DragInt("Sort order", &rect.sortOrder, 0.1f, -100, 100)) {
         changed = true;
     }
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip("Higher draws later, so higher is in front.");
     }
 
-    if (ImGui::Checkbox("Visible", &rect.visible)) {
+    if (row::Checkbox("Visible", &rect.visible)) {
         changed = true;
     }
 
@@ -1313,7 +1802,7 @@ void DrawUIText(eng::UITextComponent& label) {
 
     char buffer[512];
     std::snprintf(buffer, sizeof(buffer), "%s", label.text.c_str());
-    if (ImGui::InputTextMultiline("Text", buffer, sizeof(buffer),
+    if (row::InputTextMultiline("Text", buffer, sizeof(buffer),
                                   ImVec2(-1.0f, ImGui::GetTextLineHeight() * 3.0f))) {
         label.text = buffer;
         changed    = true;
@@ -1321,7 +1810,7 @@ void DrawUIText(eng::UITextComponent& label) {
 
     char fontBuffer[256];
     std::snprintf(fontBuffer, sizeof(fontBuffer), "%s", label.fontPath.c_str());
-    if (ImGui::InputTextWithHint("Font", "fonts/Something.ttf  (blank = built-in)",
+    if (row::InputTextWithHint("Font", "fonts/Something.ttf  (blank = built-in)",
                                  fontBuffer, sizeof(fontBuffer))) {
         label.fontPath = fontBuffer;
         changed        = true;
@@ -1338,18 +1827,18 @@ void DrawUIText(eng::UITextComponent& label) {
         ImGui::EndDragDropTarget();
     }
 
-    if (ImGui::DragFloat("Size", &label.fontSize, 0.5f, 4.0f, 256.0f, "%.0f px")) {
+    if (row::DragFloat("Size", &label.fontSize, 0.5f, 4.0f, 256.0f, "%.0f px")) {
         changed = true;
     }
 
     changed |= DrawColorField("Colour", label.color);
 
     int align = static_cast<int>(label.align);
-    if (ImGui::Combo("Align", &align, "Left\0Center\0Right\0")) {
+    if (row::Combo("Align", &align, "Left\0Center\0Right\0")) {
         label.align = static_cast<eng::UIAlign>(align);
         changed     = true;
     }
-    if (ImGui::Checkbox("Centre vertically", &label.middle)) {
+    if (row::Checkbox("Centre vertically", &label.middle)) {
         changed = true;
     }
 
@@ -1395,7 +1884,7 @@ void DrawUIImage(eng::UIImageComponent& image) {
 
     changed |= DrawColorField("Tint", image.tint);
 
-    if (ImGui::DragFloat("Outline", &image.outlineThickness, 0.1f, 0.0f, 16.0f,
+    if (row::DragFloat("Outline", &image.outlineThickness, 0.1f, 0.0f, 16.0f,
                          "%.0f")) {
         changed = true;
     }
@@ -1412,7 +1901,7 @@ void DrawUIImage(eng::UIImageComponent& image) {
 void DrawUIButton(eng::UIButtonComponent& button) {
     bool changed = false;
 
-    if (ImGui::Checkbox("Interactable", &button.interactable)) {
+    if (row::Checkbox("Interactable", &button.interactable)) {
         changed = true;
     }
 
@@ -1440,13 +1929,13 @@ void DrawUIButton(eng::UIButtonComponent& button) {
 void DrawUISlider(eng::UISliderComponent& slider) {
     bool changed = false;
 
-    if (ImGui::DragFloat("Value", &slider.value, 0.01f, slider.minValue,
+    if (row::DragFloat("Value", &slider.value, 0.01f, slider.minValue,
                          slider.maxValue)) {
         changed = true;
     }
-    if (ImGui::DragFloat("Min", &slider.minValue, 0.1f)) { changed = true; }
-    if (ImGui::DragFloat("Max", &slider.maxValue, 0.1f)) { changed = true; }
-    if (ImGui::Checkbox("Interactable", &slider.interactable)) { changed = true; }
+    if (row::DragFloat("Min", &slider.minValue, 0.1f)) { changed = true; }
+    if (row::DragFloat("Max", &slider.maxValue, 0.1f)) { changed = true; }
+    if (row::Checkbox("Interactable", &slider.interactable)) { changed = true; }
 
     changed |= DrawColorField("Track", slider.trackColor);
     changed |= DrawColorField("Fill",  slider.fillColor);
@@ -1466,7 +1955,7 @@ void DrawSpin(eng::SpinComponent& spin) {
     // Edited in degrees, stored in radians - same reason as the transform's
     // rotation field above.
     float degrees = spin.RadiansPerSecond() * eng::kRadToDeg;
-    if (ImGui::DragFloat("Degrees/sec", &degrees, 1.0f, -720.0f, 720.0f, "%.1f")) {
+    if (row::DragFloat("Degrees/sec", &degrees, 1.0f, -720.0f, 720.0f, "%.1f")) {
         spin.SetRadiansPerSecond(degrees * eng::kDegToRad);
         EditorState::Get().MarkDirty();
     }
@@ -1480,6 +1969,150 @@ void DrawSpin(eng::SpinComponent& spin) {
     ImGui::TextWrapped("Anything parented to this entity ORBITS it, because a child's "
                        "position in the world is worked out through its parent. There "
                        "is no orbit code anywhere - drag this and watch.");
+}
+
+// ---------------------------------------------------------------------------
+//  PlayerInputComponent
+// ---------------------------------------------------------------------------
+// Unity's PlayerInput inspector, with Unity's two fields: which .oinput file,
+// and which of that file's maps the game starts on.
+//
+// THE MAP LIST COMES FROM THE FILE, not from a fixed enum, which is the whole
+// reason this is laid out by hand rather than with row::Combo - BeginCombo's
+// popup outlives the call, so a group cannot be closed around it. See the
+// note at the end of FieldRow.h. DrawScript's "Bind to" does the same.
+void DrawPlayerInput(eng::PlayerInputComponent& input) {
+    char buffer[256];
+    std::snprintf(buffer, sizeof(buffer), "%s", input.ActionsPath().c_str());
+    if (row::InputTextWithHint("Actions", "input/player.oinput  (blank = none)",
+                                 buffer, sizeof(buffer))) {
+        std::string error;
+        input.SetActions(buffer, error);
+        EditorState::Get().MarkDirty();
+    }
+
+    // DROPPING THE FILE ON IT, which is how every other asset is assigned
+    // here - and the only discoverable way to learn a .oinput goes in this
+    // field at all.
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kPayloadInput)) {
+            std::string error;
+            input.SetActions(static_cast<const char*>(payload->Data), error);
+            EditorState::Get().MarkDirty();
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    // Cached after the first look, so scrolling the Inspector does not read
+    // the file sixty times a second.
+    const eng::InputActionAsset* asset = input.Asset();
+
+    row::Label("Default map");
+    if (ImGui::BeginCombo("##Default map", input.DefaultMapName().c_str())) {
+        // EACH EMPTY CASE SAYS WHICH ONE IT IS. "no maps" and "that file is
+        // broken" and "you have not chosen a file" are three different
+        // problems with three different fixes, and an empty list answers none
+        // of them.
+        if (input.ActionsPath().empty()) {
+            ImGui::TextDisabled("no actions file is set");
+        } else if (asset == nullptr) {
+            ImGui::TextDisabled("that file would not load - see the Console");
+        } else if (asset->Maps().empty()) {
+            ImGui::TextDisabled("that file has no action maps in it");
+        } else {
+            for (const eng::ActionMap& map : asset->Maps()) {
+                if (ImGui::Selectable(map.Name().c_str(),
+                                      map.Name() == input.DefaultMapName())) {
+                    input.SetDefaultMapName(map.Name());
+                    EditorState::Get().MarkDirty();
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    bool enabled = input.IsEnabled();
+    if (row::Checkbox("Enabled", &enabled)) {
+        if (enabled) {
+            input.Enable();
+        } else {
+            input.Disable();
+        }
+        EditorState::Get().MarkDirty();
+    }
+
+    // ---- how the handlers get called -------------------------------------
+    //
+    // UNITY'S Behavior DROPDOWN. The enum, the routing and the "behaviour"
+    // key have all worked since the system landed - what was missing was
+    // this row, so the only way to reach any mode but the default was to
+    // hand-edit a scene file for a key no document mentions. A setting you
+    // cannot see is a setting nobody has.
+    //
+    // THE THREE ARE EXCLUSIVE, not switches. Exactly one is in force, and
+    // picking one picks which of the three ways an action reaches a script;
+    // nothing runs the other two alongside it.
+    int notify = 0;
+    switch (input.Notifications()) {
+        case eng::InputNotification::SendMessages:      notify = 0; break;
+        case eng::InputNotification::BroadcastMessages: notify = 1; break;
+        case eng::InputNotification::Callbacks:         notify = 2; break;
+    }
+
+    // THE LABELS ARE ToString'S OWN, not a second copy of the same three
+    // words. What the dropdown shows is then exactly what lands in the scene
+    // file and the two cannot drift - the same reason ActionSendsMessage is
+    // a function the test calls rather than three lines a test transcribes.
+    const char* const notifyNames[] = {
+        eng::ToString(eng::InputNotification::SendMessages),
+        eng::ToString(eng::InputNotification::BroadcastMessages),
+        eng::ToString(eng::InputNotification::Callbacks),
+    };
+    if (row::Combo("Behaviour", &notify, notifyNames, 3)) {
+        input.SetNotifications(notify == 0 ? eng::InputNotification::SendMessages
+                               : notify == 1
+                                   ? eng::InputNotification::BroadcastMessages
+                                   : eng::InputNotification::Callbacks);
+        EditorState::Get().MarkDirty();
+    }
+
+    // WHAT EACH ONE MEANS, on screen rather than in a manual - the same
+    // reason DrawRigidbody spells its body types out. Three words with no
+    // consequences attached is a guess, and this is the moment somebody is
+    // choosing.
+    switch (input.Notifications()) {
+        case eng::InputNotification::SendMessages:
+            ImGui::TextDisabled("calls OnJump() on the scripts of THIS entity");
+            break;
+        case eng::InputNotification::BroadcastMessages:
+            ImGui::TextDisabled("calls OnJump() on this entity AND every child "
+                                "under it - for a rig whose legs and gun are "
+                                "separate objects");
+            break;
+        case eng::InputNotification::Callbacks:
+            ImGui::TextDisabled("calls nothing by itself; only code that asked "
+                                "with Subscribe() hears anything");
+            break;
+    }
+
+    // WHAT IT IS ACTUALLY ON RIGHT NOW, shown only when that differs from the
+    // authored map - which is exactly when somebody is confused about why the
+    // controls are not what the field above says. A script switched it.
+    const std::string current = input.CurrentActionMapName();
+    if (!current.empty() && current != input.DefaultMapName()) {
+        ImGui::TextDisabled("currently on '%s' - a script switched it", current.c_str());
+    }
+
+    if (asset != nullptr) {
+        if (const eng::ActionMap* map = asset->FindMap(current)) {
+            ImGui::TextDisabled("%zu action(s) in this map", map->Actions().size());
+        }
+    }
+
+    ImGui::TextWrapped("The file holds SEVERAL maps and one is current at a time. A "
+                       "script changes which with playerInput->SwitchCurrentActionMap"
+                       "(\"Menu\"), so Escape can mean Pause while playing and Cancel "
+                       "while the menu is up with nothing to arbitrate between them.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1574,6 +2207,33 @@ float DragStepFor(float value) {
     return std::max(0.01f, std::abs(value) * 0.01f);
 }
 
+// ---------------------------------------------------------------------------
+//  WHAT A VARIABLE'S ROW IS CALLED.
+//
+//  The variable's own name, for all but one case - and the exception is an
+//  ARRAY ELEMENT, which is labelled by its INDEX alone:
+//
+//      Walk animations        4
+//        [0]  [ hero.png#walk_n  ]
+//        [1]  [ hero.png#walk_e  ]
+//
+//  The element's real name is "walkAnimations[0]" and stays so everywhere it
+//  matters - it is the key in the scene file, the id of the widget, and what
+//  a prefab override records. It is only the LABEL that drops the name, and
+//  for the obvious reason: the header directly above carries it, so printing
+//  it again on every row writes one word sixteen times and leaves the index -
+//  the only part that differs - at the far end of the longest line.
+//
+//  Which field is an element and which is not comes from the engine rather
+//  than from reading brackets here; see ScriptField::arrayName.
+// ---------------------------------------------------------------------------
+std::string FieldRowLabel(const eng::ScriptField& field) {
+    if (field.arrayIndex < 0) {
+        return field.name;
+    }
+    return "[" + std::to_string(field.arrayIndex) + "]";
+}
+
 // Text is the one type that cannot be handed to ImGui as a pointer, because
 // ImGui edits a char buffer and the variable is a std::string.
 // Which asset slot a string variable's marker asks for, if any.
@@ -1641,7 +2301,7 @@ bool DrawStringField(const eng::ScriptField& field) {
                                  ? !eng::SheetHasAnimation(*text)
                                  : !eng::ImageExists(*text));
 
-        if (DrawAssetSlot(field.name.c_str(), kind, *text, broken,
+        if (DrawAssetSlot(FieldRowLabel(field).c_str(), kind, *text, broken,
                           kind == AssetSlotKind::Animation
                               ? "drag an animation here from Assets - expand a "
                                 "sheet's row to find them - or click to choose"
@@ -1665,7 +2325,7 @@ bool DrawStringField(const eng::ScriptField& field) {
         ImGui::BeginDisabled();
         char preview[80];
         std::snprintf(preview, sizeof(preview), "%.60s...", text->c_str());
-        ImGui::InputText(field.name.c_str(), preview, sizeof(preview),
+        row::InputText(FieldRowLabel(field).c_str(), preview, sizeof(preview),
                          ImGuiInputTextFlags_ReadOnly);
         ImGui::EndDisabled();
         ImGui::TextDisabled("%zu characters - too long to edit here, so it is shown "
@@ -1675,7 +2335,7 @@ bool DrawStringField(const eng::ScriptField& field) {
 
     char buffer[kScriptStringMax];
     std::snprintf(buffer, sizeof(buffer), "%s", text->c_str());
-    const bool typed = ImGui::InputText(field.name.c_str(), buffer, sizeof(buffer));
+    const bool typed = row::InputText(FieldRowLabel(field).c_str(), buffer, sizeof(buffer));
 
     // ======================================================================
     //  AND IT TAKES A DROP, whatever kind of asset it is.
@@ -1804,8 +2464,17 @@ bool DrawEntityRefField(const eng::ScriptComponent& script,
 
     bool changed = false;
 
+    // Why a drop that is hovering over this slot will not be taken, written
+    // by the drop target below and reported under the row. Held rather than
+    // drawn on the spot because the row is not finished at that point - the
+    // picker comes next, and a line of text in the middle of it would push
+    // the popup's anchor down a line.
+    std::string refusal;
+
     // ---- the button, which is the current value and the picker -----------
     const char* shown = ref->IsSet() ? ref->TargetName().c_str() : "(none)";
+
+    row::Label(FieldRowLabel(field).c_str());
 
     if (missing) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
@@ -1813,9 +2482,9 @@ bool DrawEntityRefField(const eng::ScriptComponent& script,
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
     }
 
-    // Sized so the row lines up with the drag boxes above it, and so there is
-    // a target big enough to drop onto rather than a word.
-    const bool pick = ImGui::Button(shown, ImVec2(ImGui::CalcItemWidth(), 0.0f));
+    // Fills what the name left, so the row lines up with the drag boxes above
+    // it, and so there is a target big enough to drop onto rather than a word.
+    const bool pick = ImGui::Button(shown, ImVec2(row::ValueWidth(), 0.0f));
 
     if (missing || !ref->IsSet()) {
         ImGui::PopStyleColor();
@@ -1824,28 +2493,51 @@ bool DrawEntityRefField(const eng::ScriptComponent& script,
     // AGAINST THE BUTTON, while the button is still the last item drawn.
     DrawFieldTooltip(script, field);
 
-    // ---- dropping an entity on it ----------------------------------------
+    // ======================================================================
+    //  DROPPING AN ENTITY ON IT - and the constraint decides whether the drop
+    //  lands at all.
     //
-    // ACCEPTED WHATEVER IT IS, including an entity that does not satisfy the
-    // constraint. Refusing the drop would leave somebody holding the thing
-    // they meant with no explanation; taking it and saying it is wrong is the
-    // same information without the guessing.
+    //  THIS USED TO TAKE WHATEVER IT WAS and then paint the row orange: the
+    //  argument was that refusing silently leaves somebody holding the thing
+    //  they meant with no explanation. The argument was right about silence
+    //  and wrong about what to do: a reference is typed, so a Door slot
+    //  pointed at a lamp-post is not a level half-built, it is a drop that
+    //  missed - and writing it in meant clearing the slot by hand before
+    //  trying again.
+    //
+    //  SO THE DROP IS DECLINED AND THE REASON IS SHOWN. GetDragDropPayload
+    //  reports what is being carried without claiming it, so the target never
+    //  lights up for an entity that cannot satisfy the slot, and the row says
+    //  what is missing from it for as long as the cursor is over it. The same
+    //  shape the Hierarchy's reparent target uses, and for the same reason: a
+    //  target that accepts and does nothing looks like a broken feature.
+    //
+    //  AN UNCONSTRAINED eng::EntityRef STILL TAKES ANYTHING. EntityHasNamed
+    //  answers true for an empty requiredType, which is what "any entity will
+    //  do" means - so `eng::EntityRef target;` is unchanged by all of this.
+    // ======================================================================
     if (ImGui::BeginDragDropTarget()) {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kPayloadEntity)) {
-            if (payload->DataSize == static_cast<int>(sizeof(eng::EntityId))) {
-                eng::EntityId dropped{};
-                std::memcpy(&dropped, payload->Data, sizeof(dropped));
-                if (const eng::Entity* entity = scene.Get(dropped)) {
+        const ImGuiPayload* peek = ImGui::GetDragDropPayload();
+        if (peek != nullptr && peek->IsDataType(kPayloadEntity) &&
+            peek->DataSize == static_cast<int>(sizeof(eng::EntityId))) {
+
+            eng::EntityId dropped{};
+            std::memcpy(&dropped, peek->Data, sizeof(dropped));
+            const eng::Entity* entity = scene.Get(dropped);
+
+            if (entity != nullptr &&
+                eng::EntityHasNamed(*entity, field.requiredType)) {
+                if (ImGui::AcceptDragDropPayload(kPayloadEntity) != nullptr) {
                     ref->Set(*entity);
                     changed = true;
                 }
+            } else if (entity != nullptr) {
+                refusal = "'" + entity->Name() + "' has no " + field.requiredType +
+                          " on it, so there is nothing here for this to point at";
             }
         }
         ImGui::EndDragDropTarget();
     }
-
-    ImGui::SameLine();
-    ImGui::TextUnformatted(field.name.c_str());
 
     // ---- the picker ------------------------------------------------------
     if (pick) {
@@ -1891,11 +2583,23 @@ bool DrawEntityRefField(const eng::ScriptComponent& script,
     }
 
     // ---- what is wrong with it, if anything ------------------------------
-    if (missing) {
+    //
+    // THE REFUSAL COMES FIRST, because it is about the entity under the cursor
+    // right now and the two below are about the one already in the slot. A
+    // drag in flight is the more urgent of the two things to answer.
+    if (!refusal.empty()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f), "%s", refusal.c_str());
+    } else if (missing) {
         ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
                            "nothing in this scene is called '%s'",
                            ref->TargetName().c_str());
     } else if (wrongKind) {
+        // STILL REACHABLE, and it has to be: the drop target refuses an
+        // entity that does not fit, but a scene file may name one, the
+        // picker's list is built from the constraint and not policed by it,
+        // and a component can be removed from an entity after it was pointed
+        // at. The slot is allowed to be wrong; it is not allowed to be wrong
+        // quietly.
         ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
                            "'%s' has no %s on it, so this will not do anything",
                            ref->TargetName().c_str(), field.requiredType.c_str());
@@ -1919,6 +2623,123 @@ bool DrawEntityRefField(const eng::ScriptComponent& script,
 //  own type is that the breakage is visible while you are building the level
 //  rather than the first time the gun fires.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  ONE SLOT, EITHER KIND OF THING.
+//
+//  An eng::GameObjectRef holds a scene object OR a prefab, so this target
+//  accepts a drag from the Hierarchy AND a drag from the Assets panel, and
+//  says which it is currently holding. That is the whole feature: the choice
+//  between "a thing in the level" and "a template on disk" belongs here,
+//  where you can change your mind by dragging something else, rather than in
+//  the script's C++ type.
+//
+//  NO CONSTRAINT IS CHECKED, unlike the EntityRef slot below it. A typed
+//  reference refuses a drop that cannot satisfy it; this one is untyped by
+//  definition - it takes anything, because what it is FOR is being either.
+//
+//  THE KIND IS SHOWN BESIDE THE NAME, not left to be inferred from the text.
+//  "Door" and "bullet.oprefab" are distinguishable by eye most of the time
+//  and not always, and the difference decides whether Instantiate clones
+//  something or builds it from a file.
+// ---------------------------------------------------------------------------
+bool DrawGameObjectRefField(const eng::ScriptComponent& script,
+                            const eng::ScriptField&     field) {
+    eng::GameObjectRef* ref = field.AsGameObjectRef();
+    if (ref == nullptr) {
+        return false;
+    }
+
+    bool changed = false;
+
+    // A prefab that is not on disk, or a scene object nothing answers to.
+    // Two different ways of being broken, shown the same way, because the
+    // thing to do about them is the same: drag something else onto it.
+    const bool missing =
+        ref->IsSet() && (ref->IsPrefab() ? !eng::FileSystem::Exists(ref->PrefabPath())
+                                         : ref->Target() == nullptr);
+
+    std::string shown = "(none)";
+    if (ref->IsPrefab()) {
+        const std::string& path  = ref->PrefabPath();
+        const std::size_t  slash = path.find_last_of('/');
+        shown = slash == std::string::npos ? path : path.substr(slash + 1);
+    } else if (ref->IsSceneObject()) {
+        shown = ref->Name();
+    }
+
+    row::Label(FieldRowLabel(field).c_str());
+
+    if (missing) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
+    } else if (!ref->IsSet()) {
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    }
+
+    // A BUTTON, for the reason the prefab slot gives: it is a drop target,
+    // and dropping onto a word is fiddly in a way nobody blames on the widget.
+    const bool clear = ImGui::Button(shown.c_str(), ImVec2(row::ValueWidth(), 0.0f));
+
+    if (missing || !ref->IsSet()) {
+        ImGui::PopStyleColor();
+    }
+
+    DrawFieldTooltip(script, field);
+
+    if (ImGui::BeginDragDropTarget()) {
+        // THE HIERARCHY'S PAYLOAD IS AN ID, the Assets panel's is a path.
+        // Both are accepted here and nowhere else in this file does one
+        // target take two - which is exactly what makes this type worth
+        // having.
+        if (const ImGuiPayload* dropped =
+                ImGui::AcceptDragDropPayload(kPayloadEntity)) {
+            if (dropped->DataSize == static_cast<int>(sizeof(eng::EntityId))) {
+                eng::EntityId id{};
+                std::memcpy(&id, dropped->Data, sizeof(id));
+                if (eng::Scene* active = eng::Scene::Active()) {
+                    if (const eng::Entity* entity = active->Get(id)) {
+                        ref->SetSceneObject(entity->Name());
+                        changed = true;
+                    }
+                }
+            }
+        } else if (const ImGuiPayload* asset =
+                       ImGui::AcceptDragDropPayload(kPayloadPrefab)) {
+            // Trimmed at the first NUL: the payload is sized to include the
+            // terminator - the same note the prefab slot carries.
+            const std::string path(static_cast<const char*>(asset->Data),
+                                   static_cast<std::size_t>(asset->DataSize));
+            ref->SetPrefab(path.c_str());
+            changed = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    if (clear && ref->IsSet()) {
+        ref->Clear();
+        changed = true;
+    }
+
+    // WHICH KIND, in words. See the note above this function.
+    if (ref->IsPrefab()) {
+        ImGui::TextDisabled("a prefab - Instantiate builds a new one from the file");
+    } else if (ref->IsSceneObject()) {
+        ImGui::TextDisabled("an object in the scene - Instantiate clones it");
+    } else {
+        ImGui::TextDisabled("drag an object from the Hierarchy or a prefab from "
+                            "Assets");
+    }
+
+    if (missing) {
+        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
+                           ref->IsPrefab()
+                               ? "that file is not there any more"
+                               : "nothing in the scene answers to that name");
+    }
+
+    return changed;
+}
+
 bool DrawPrefabRefField(const eng::ScriptComponent& script,
                         const eng::ScriptField&     field) {
     eng::PrefabRef* ref = field.AsPrefabRef();
@@ -1940,6 +2761,8 @@ bool DrawPrefabRefField(const eng::ScriptComponent& script,
         shown = slash == std::string::npos ? path : path.substr(slash + 1);
     }
 
+    row::Label(FieldRowLabel(field).c_str());
+
     if (missing) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
     } else if (!ref->IsSet()) {
@@ -1950,7 +2773,7 @@ bool DrawPrefabRefField(const eng::ScriptComponent& script,
     // A BUTTON RATHER THAN A LABEL, even with no picker behind it, because a
     // button is a big obvious rectangle and this is a drop target. Dropping
     // onto a word is fiddly in a way nobody blames on the widget.
-    const bool clear = ImGui::Button(shown.c_str(), ImVec2(ImGui::CalcItemWidth(), 0.0f));
+    const bool clear = ImGui::Button(shown.c_str(), ImVec2(row::ValueWidth(), 0.0f));
 
     if (missing || !ref->IsSet()) {
         ImGui::PopStyleColor();
@@ -1972,9 +2795,6 @@ bool DrawPrefabRefField(const eng::ScriptComponent& script,
         }
         ImGui::EndDragDropTarget();
     }
-
-    ImGui::SameLine();
-    ImGui::TextUnformatted(field.name.c_str());
 
     if (clear && ref->IsSet()) {
         ref->Clear();
@@ -2022,7 +2842,7 @@ bool DrawAnimationRefField(const eng::ScriptField& field) {
     const bool broken = ref->IsSet() && !eng::SheetHasAnimation(ref->Path());
 
     std::string chosen;
-    if (DrawAssetSlot(field.name.c_str(), AssetSlotKind::Animation, ref->Path(),
+    if (DrawAssetSlot(FieldRowLabel(field).c_str(), AssetSlotKind::Animation, ref->Path(),
                       broken,
                       "drag an animation here from Assets - expand a sheet's row "
                       "to find them - or click to choose",
@@ -2080,7 +2900,7 @@ bool DrawImageRefField(const eng::ScriptField& field) {
     const bool broken = ref->IsSet() && !eng::ImageExists(ref->Path());
 
     std::string chosen;
-    if (DrawAssetSlot(field.name.c_str(), AssetSlotKind::Image, ref->Path(), broken,
+    if (DrawAssetSlot(FieldRowLabel(field).c_str(), AssetSlotKind::Image, ref->Path(), broken,
                       "drag an image here from Assets, or click to choose one",
                       chosen)) {
         ref->Set(chosen);
@@ -2116,7 +2936,12 @@ bool DrawImageRefField(const eng::ScriptField& field) {
 // other type ignores it.
 bool DrawFieldWidget(const eng::ScriptComponent& script,
                      const eng::ScriptField& field) {
-    const char* label = field.name.c_str();
+    // NOT field.name: an array element is labelled by its index, because the
+    // header above it already carries the name. See FieldRowLabel. The widget
+    // is still identified by the full name - DrawScriptFields pushes it as an
+    // id around this call - so two arrays' "[0]" rows are two widgets.
+    const std::string rowLabel = FieldRowLabel(field);
+    const char*       label    = rowLabel.c_str();
 
     switch (field.type) {
         case eng::ScriptFieldType::Float: {
@@ -2125,9 +2950,9 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
                 break;
             }
             if (field.ranged) {
-                return ImGui::SliderFloat(label, value, field.min, field.max);
+                return row::SliderFloat(label, value, field.min, field.max);
             }
-            return ImGui::DragFloat(label, value, DragStepFor(*value));
+            return row::DragFloat(label, value, DragStepFor(*value));
         }
 
         case eng::ScriptFieldType::Int: {
@@ -2136,12 +2961,12 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
                 break;
             }
             if (field.ranged) {
-                return ImGui::SliderInt(label, value, static_cast<int>(field.min),
+                return row::SliderInt(label, value, static_cast<int>(field.min),
                                         static_cast<int>(field.max));
             }
             // The same step the sprite's draw order uses, because a whole
             // number wants one pixel of mouse per unit and not less.
-            return ImGui::DragInt(label, value, 0.2f);
+            return row::DragInt(label, value, 0.2f);
         }
 
         case eng::ScriptFieldType::Bool: {
@@ -2149,7 +2974,7 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
             if (value == nullptr) {
                 break;
             }
-            return ImGui::Checkbox(label, value);
+            return row::Checkbox(label, value);
         }
 
         case eng::ScriptFieldType::String:
@@ -2160,6 +2985,9 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
 
         case eng::ScriptFieldType::Prefab:
             return DrawPrefabRefField(script, field);
+
+        case eng::ScriptFieldType::GameObject:
+            return DrawGameObjectRefField(script, field);
 
         case eng::ScriptFieldType::Animation:
             return DrawAnimationRefField(field);
@@ -2177,7 +3005,7 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
             // sensitivities on one widget would make a diagonal drag curve.
             const float step =
                 DragStepFor(std::max(std::abs(xy[0]), std::abs(xy[1])));
-            if (ImGui::DragFloat2(label, xy, step)) {
+            if (row::DragFloat2(label, xy, step)) {
                 *value = eng::Vec2{xy[0], xy[1]};
                 return true;
             }
@@ -2193,7 +3021,7 @@ bool DrawFieldWidget(const eng::ScriptComponent& script,
             // the same conversion DrawSprite does for a tint.
             float rgba[4] = {value->r / 255.0f, value->g / 255.0f, value->b / 255.0f,
                              value->a / 255.0f};
-            if (ImGui::ColorEdit4(label, rgba)) {
+            if (row::ColorEdit4(label, rgba)) {
                 *value = eng::Color{static_cast<unsigned char>(rgba[0] * 255.0f),
                                     static_cast<unsigned char>(rgba[1] * 255.0f),
                                     static_cast<unsigned char>(rgba[2] * 255.0f),
@@ -2274,6 +3102,351 @@ void DrawFieldTooltip(const eng::ScriptComponent& script,
     ImGui::EndTooltip();
 }
 
+// ---------------------------------------------------------------------------
+//  ONE VARIABLE: its widget, its revert button and anything wrong with it.
+//
+//  PULLED OUT OF THE LOOP so that an array's elements get exactly the same
+//  row as a plain variable - the revert button, the does-not-fit warning, the
+//  out-of-range warning, all of it. An array element IS an ordinary variable
+//  as far as everything but the Inspector's layout is concerned (see
+//  ScriptField::arrayName), and the surest way to keep that true is for one
+//  function to draw both.
+// ---------------------------------------------------------------------------
+void DrawFieldRow(eng::ScriptComponent& script, const eng::ScriptField& field) {
+    // Keyed on the NAME, so the widget keeps its identity when another
+    // variable is added above it. An index would hand one field's
+    // half-typed text to its neighbour.
+    ImGui::PushID(field.name.c_str());
+
+    const bool overridden = script.IsFieldOverridden(field.name);
+
+    if (DrawFieldWidget(script, field)) {
+        // The widget has already written the new value through the
+        // field's own pointer; this records it as the saved one. Exactly
+        // one piece of code - FieldToJson - knows how each type is
+        // stored, and it is in the engine beside the code that reads it
+        // back.
+        script.SaveFieldValue(field.name);
+        EditorState::Get().MarkDirty();
+    }
+    // Skipped for a reference, which drew its own against the button -
+    // see the note on the forward declaration above.
+    if (field.type != eng::ScriptFieldType::Entity) {
+        DrawFieldTooltip(script, field);
+    }
+
+    // DIRECTLY AFTER THE WIDGET, so it reads as belonging to it. Anything
+    // that has to be said about the value goes underneath, below.
+    if (overridden) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("revert")) {
+            script.RevertFieldValue(field.name);
+            EditorState::Get().MarkDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Forget this entity's value and go back to the one "
+                              "written in the script");
+        }
+
+        // ==============================================================
+        //  ASKED AGAIN, AND THAT IS THE WHOLE FIX.
+        //
+        //  `overridden` was answered at the top of this function, BEFORE
+        //  the revert button above - and pressing that button erases the
+        //  very key the line below reads. So on the one frame a revert
+        //  happened, this block was still entered and at() was called for
+        //  a key that had just gone.
+        //
+        //  nlohmann's at() THROWS for a missing key, nothing here catches
+        //  it, and an uncaught exception out of a draw call is not a
+        //  message in the Console - it is the process dying with a crash
+        //  dialogue. Reported as exactly that.
+        //
+        //  Nothing about this was particular to one kind of variable: any
+        //  overridden field's revert button did it.
+        // ==============================================================
+        if (script.IsFieldOverridden(field.name)) {
+            // ONE LOOKUP, held. Two calls to at() for the same key was
+            // also how the first one came to be read without a guard.
+            const eng::Json& saved = script.SavedValues().at(field.name);
+
+            // A SAVED VALUE THAT WILL NOT LOAD. The engine reports this to
+            // the Console when the scene opens, and then it is over - so
+            // it is also shown here, next to the variable it is about, for
+            // as long as it is true.
+            if (!eng::JsonFitsFieldType(field.type, saved)) {
+                ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
+                                   "the scene file has %s here, which is not a "
+                                   "%s - the script's own value is being used",
+                                   saved.dump().c_str(),
+                                   eng::ScriptFieldTypeName(field.type));
+            }
+        }
+    }
+
+    // A RANGED VALUE OUTSIDE ITS RANGE, which is otherwise invisible: a
+    // slider draws it pinned at whichever end it overshot, so 500 on a
+    // 1-to-200 range looks exactly like 200. It can get there from a
+    // hand-edited scene file or from the script setting it, because
+    // nothing clamps on load - deliberately, since silently rewriting a
+    // number somebody typed is worse than showing it.
+    //
+    // TOUCHING THE SLIDER WILL pull it into range, and that is worth
+    // warning about before it happens rather than after.
+    if (field.ranged) {
+        const float value = field.type == eng::ScriptFieldType::Int
+                                ? static_cast<float>(*field.AsInt())
+                                : *field.AsFloat();
+        if (value < field.min || value > field.max) {
+            ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                               "%.3g is outside %.3g to %.3g - the slider shows it "
+                               "at the end, and moving it will bring it in",
+                               static_cast<double>(value),
+                               static_cast<double>(field.min),
+                               static_cast<double>(field.max));
+        }
+    }
+
+    ImGui::PopID();
+}
+
+// ---------------------------------------------------------------------------
+//  THE VARIABLES, GROUPED: a plain variable is a block of one, and an array
+//  is a block of all its elements.
+//
+//  IN DECLARATION ORDER, which ScriptFields promises and a script relies on
+//  to put related settings together. So the elements of an array are gathered
+//  only while they are CONSECUTIVE: the generated exposer always emits them
+//  that way, and a hand-written OnExpose that interleaves two arrays gets two
+//  headers rather than having its order rearranged behind its back.
+// ---------------------------------------------------------------------------
+struct FieldBlock {
+    std::string                          arrayName;   // empty: a plain variable
+    std::vector<const eng::ScriptField*> fields;
+};
+
+std::vector<FieldBlock> GroupFields(const eng::ScriptFields& fields) {
+    std::vector<FieldBlock> blocks;
+    for (const eng::ScriptField& field : fields.All()) {
+        const bool continues = field.arrayIndex >= 0 && !blocks.empty() &&
+                               blocks.back().arrayName == field.arrayName;
+        if (!continues) {
+            blocks.push_back(FieldBlock{
+                field.arrayIndex >= 0 ? field.arrayName : std::string{}, {}});
+        }
+        blocks.back().fields.push_back(&field);
+    }
+    return blocks;
+}
+
+// ---------------------------------------------------------------------------
+//  Is this element still holding something, or is it at its zero?
+//
+//  ASKED THROUGH FieldToJson rather than with a switch over the ten field
+//  types, which is not laziness: that function is the engine's one answer to
+//  "what is in this field", it is what the scene file is written from, and a
+//  second opinion here could disagree with what gets saved. Every type comes
+//  back as text, a number, a boolean or an array of numbers.
+//
+//  AN ENTITY, PREFAB, ANIMATION OR IMAGE REFERENCE IS TEXT - the target's
+//  name or the asset's path - so "" is an empty slot, which is exactly the
+//  question being asked.
+// ---------------------------------------------------------------------------
+bool FieldIsAtZero(const eng::ScriptField& field) {
+    const eng::Json value = eng::FieldToJson(field);
+    if (value.is_string()) {
+        return value.get<std::string>().empty();
+    }
+    if (value.is_boolean()) {
+        return !value.get<bool>();
+    }
+    if (value.is_number()) {
+        return value.get<double>() == 0.0;
+    }
+    if (value.is_array()) {
+        return std::all_of(value.begin(), value.end(), [](const eng::Json& part) {
+            return part.is_number() && part.get<double>() == 0.0;
+        });
+    }
+
+    // ======================================================================
+    //  AN OBJECT, WHICH USED TO BE IMPOSSIBLE HERE.
+    //
+    //  The note above this function says "every type comes back as text, a
+    //  number, a boolean or an array of numbers", and that was true until a
+    //  GameObject field arrived: it writes { "entity": ... } or
+    //  { "prefab": ... }, because it is the one reference that cannot say
+    //  which half it is from the text alone.
+    //
+    //  Falling through to `return true` would call a field holding a real
+    //  prefab EMPTY - and this function's whole job is warning about an
+    //  element that is out of sight and still doing work. The empty object an
+    //  unset one writes is the genuinely empty case.
+    // ======================================================================
+    if (value.is_object()) {
+        return value.empty();
+    }
+
+    return true;   // nothing recognisable in it, so nothing to warn about
+}
+
+// Empties one element, whatever type it is, and records it.
+//
+// THE ZERO IS BUILT FROM THE VALUE'S OWN SHAPE for the reason above: no list
+// of types to keep in step with the engine's. Text becomes "", a number 0, a
+// boolean false, and an array of numbers the same array of zeros - which
+// covers a Vec2 and a Color without naming either.
+bool ClearFieldValue(eng::ScriptComponent& script, const eng::ScriptField& field) {
+    eng::Json zero = eng::FieldToJson(field);
+    if (zero.is_string()) {
+        zero = "";
+    } else if (zero.is_boolean()) {
+        zero = false;
+    } else if (zero.is_number()) {
+        zero = 0;
+    } else if (zero.is_array()) {
+        for (eng::Json& part : zero) {
+            part = 0;
+        }
+    } else if (zero.is_object()) {
+        // A GameObject field - see the note in FieldIsAtZero. Emptying it is
+        // emptying the object, which is exactly what an unset one writes, so
+        // this clears to a value the loader already understands rather than
+        // to a null. A null would be read by a prefab instance as "erase this
+        // field" rather than "nothing chosen".
+        zero = eng::Json::object();
+    } else {
+        return false;
+    }
+
+    std::string error;
+    if (!eng::ReadFieldFromJson(field, zero, error)) {
+        return false;
+    }
+    script.SaveFieldValue(field.name);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+//  AN ARRAY: one collapsing header, its length, and the rows inside it.
+//
+//  ==========================================================================
+//  WHY A HEADER AT ALL. An array was one row per element with the name
+//  repeated on every one of them:
+//
+//      walkAnimations[0]  walkAnimations[1]  ... walkAnimations[15]
+//
+//  Sixteen rows that could not be folded away, saying the same word sixteen
+//  times, with the only part that differed - the index - pushed to the end of
+//  the longest label in the panel. The elements are genuinely sixteen
+//  variables (that is what makes them save, override and undo like anything
+//  else); it is the LOOKING at them that wanted grouping.
+//
+//  ==========================================================================
+//  THE LENGTH IS A NUMBER ON THE HEADER, and what it does is limited in a way
+//  worth being plain about: the script's array is a fixed size and this does
+//  not change it. It is how many rows this entity offers - see
+//  ScriptComponent::ArrayLengthUsed, which argues the whole thing.
+//
+//  SHORTENING DOES NOT CLEAR, because a drag from 16 to 1 would otherwise
+//  destroy fifteen values and nothing could give them back. So anything left
+//  behind is NAMED, and clearing it is a button somebody presses.
+// ---------------------------------------------------------------------------
+void DrawArrayBlock(eng::ScriptComponent& script, const eng::ScriptFields& fields,
+                    const FieldBlock& block) {
+    const std::size_t declared = fields.ArrayLength(block.arrayName);
+    const std::size_t used     = script.ArrayLengthUsed(block.arrayName);
+
+    ImGui::PushID(block.arrayName.c_str());
+
+    // Measured before the header is drawn, so the length lands in the same
+    // column every other value is in. See row::ValueColumn.
+    const float startX     = ImGui::GetCursorPosX();
+    const float labelWidth = row::LabelWidth();
+
+    // AllowOverlap, because the length widget is drawn over the right-hand
+    // end of the header's own row and the header would otherwise keep the
+    // hover for a drag box sitting on top of it.
+    ImGui::AlignTextToFramePadding();
+    const bool open = ImGui::TreeNodeEx(
+        block.arrayName.c_str(),
+        ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth);
+
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("%s[%zu] - %zu element(s), %zu offered here.\n"
+                          "The script's array is always %zu long; the number on the "
+                          "right is how many rows this entity uses.",
+                          block.arrayName.c_str(), declared, declared, used, declared);
+    }
+
+    // ---- the length ------------------------------------------------------
+    //
+    // THE CAPACITY IS IN THE FORMAT STRING rather than in a second widget
+    // beside it: "3 of 16" is the whole answer in one place, and the one
+    // thing somebody needs to know before dragging it is where the end is.
+    char format[32];
+    std::snprintf(format, sizeof(format), "%%d of %zu", declared);
+
+    int length = static_cast<int>(used);
+    row::ValueColumn(startX, labelWidth);
+    if (ImGui::DragInt("##length", &length, 0.1f, 0, static_cast<int>(declared),
+                       format, ImGuiSliderFlags_AlwaysClamp)) {
+        script.SetArrayLengthUsed(block.arrayName,
+                                  static_cast<std::size_t>(std::max(0, length)));
+        EditorState::Get().MarkDirty();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("How many of this array's %zu elements are offered above.\n"
+                          "It does not resize the array - the script always has all "
+                          "%zu - so shortening hides rows rather than clearing them.",
+                          declared, declared);
+    }
+
+    // ---- what is hidden, and still set -----------------------------------
+    //
+    // THE ONE THING THIS MUST NOT BE QUIET ABOUT. A length of 3 on an array
+    // of 16 does not stop the script reading elements 3 to 15, so an element
+    // out of sight with something in it is a value doing work that nothing on
+    // screen mentions - which is the failure ScriptVars.h spends a page on.
+    std::vector<const eng::ScriptField*> hidden;
+    for (std::size_t i = used; i < block.fields.size(); ++i) {
+        if (!FieldIsAtZero(*block.fields[i])) {
+            hidden.push_back(block.fields[i]);
+        }
+    }
+    if (!hidden.empty()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
+                           "%zu hidden element(s) still have a value, and the script "
+                           "still reads them", hidden.size());
+        if (ImGui::SmallButton("Clear them")) {
+            for (const eng::ScriptField* field : hidden) {
+                ClearFieldValue(script, *field);
+            }
+            EditorState::Get().MarkDirty();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Empties the elements past the length. Dragging the "
+                              "length back out shows them instead.");
+        }
+    }
+
+    if (!open) {
+        ImGui::PopID();
+        return;
+    }
+
+    // ---- the elements ----------------------------------------------------
+    for (std::size_t i = 0; i < block.fields.size() && i < used; ++i) {
+        DrawFieldRow(script, *block.fields[i]);
+    }
+    if (used == 0) {
+        ImGui::TextDisabled("none offered - drag the length out to use some");
+    }
+
+    ImGui::TreePop();
+    ImGui::PopID();
+}
+
 // True when it drew anything, so the caller can decide whether a separator
 // belongs under it. Returned rather than asked for a second time: the answer
 // costs a list of strings to work out, and working it out twice a frame for a
@@ -2291,102 +3464,12 @@ bool DrawScriptFields(eng::ScriptComponent& script) {
 
     ImGui::SeparatorText("Variables");
 
-    for (const eng::ScriptField& field : fields.All()) {
-        // Keyed on the NAME, so the widget keeps its identity when another
-        // variable is added above it. An index would hand one field's
-        // half-typed text to its neighbour.
-        ImGui::PushID(field.name.c_str());
-
-        const bool overridden = script.IsFieldOverridden(field.name);
-
-        if (DrawFieldWidget(script, field)) {
-            // The widget has already written the new value through the
-            // field's own pointer; this records it as the saved one. Exactly
-            // one piece of code - FieldToJson - knows how each type is
-            // stored, and it is in the engine beside the code that reads it
-            // back.
-            script.SaveFieldValue(field.name);
-            EditorState::Get().MarkDirty();
+    for (const FieldBlock& block : GroupFields(fields)) {
+        if (block.arrayName.empty()) {
+            DrawFieldRow(script, *block.fields.front());
+        } else {
+            DrawArrayBlock(script, fields, block);
         }
-        // Skipped for a reference, which drew its own against the button -
-        // see the note on the forward declaration above.
-        if (field.type != eng::ScriptFieldType::Entity) {
-            DrawFieldTooltip(script, field);
-        }
-
-        // DIRECTLY AFTER THE WIDGET, so it reads as belonging to it. Anything
-        // that has to be said about the value goes underneath, below.
-        if (overridden) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("revert")) {
-                script.RevertFieldValue(field.name);
-                EditorState::Get().MarkDirty();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Forget this entity's value and go back to the one "
-                                  "written in the script");
-            }
-
-            // ==============================================================
-            //  ASKED AGAIN, AND THAT IS THE WHOLE FIX.
-            //
-            //  `overridden` was answered at the top of this iteration, BEFORE
-            //  the revert button above - and pressing that button erases the
-            //  very key the line below reads. So on the one frame a revert
-            //  happened, this block was still entered and at() was called for
-            //  a key that had just gone.
-            //
-            //  nlohmann's at() THROWS for a missing key, nothing here catches
-            //  it, and an uncaught exception out of a draw call is not a
-            //  message in the Console - it is the process dying with a crash
-            //  dialogue. Reported as exactly that.
-            //
-            //  Nothing about this was particular to one kind of variable: any
-            //  overridden field's revert button did it.
-            // ==============================================================
-            if (script.IsFieldOverridden(field.name)) {
-                // ONE LOOKUP, held. Two calls to at() for the same key was
-                // also how the first one came to be read without a guard.
-                const eng::Json& saved = script.SavedValues().at(field.name);
-
-                // A SAVED VALUE THAT WILL NOT LOAD. The engine reports this to
-                // the Console when the scene opens, and then it is over - so
-                // it is also shown here, next to the variable it is about, for
-                // as long as it is true.
-                if (!eng::JsonFitsFieldType(field.type, saved)) {
-                    ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
-                                       "the scene file has %s here, which is not a "
-                                       "%s - the script's own value is being used",
-                                       saved.dump().c_str(),
-                                       eng::ScriptFieldTypeName(field.type));
-                }
-            }
-        }
-
-        // A RANGED VALUE OUTSIDE ITS RANGE, which is otherwise invisible: a
-        // slider draws it pinned at whichever end it overshot, so 500 on a
-        // 1-to-200 range looks exactly like 200. It can get there from a
-        // hand-edited scene file or from the script setting it, because
-        // nothing clamps on load - deliberately, since silently rewriting a
-        // number somebody typed is worse than showing it.
-        //
-        // TOUCHING THE SLIDER WILL pull it into range, and that is worth
-        // warning about before it happens rather than after.
-        if (field.ranged) {
-            const float value = field.type == eng::ScriptFieldType::Int
-                                    ? static_cast<float>(*field.AsInt())
-                                    : *field.AsFloat();
-            if (value < field.min || value > field.max) {
-                ImGui::TextColored(ImVec4(0.95f, 0.78f, 0.30f, 1.0f),
-                                   "%.3g is outside %.3g to %.3g - the slider shows it "
-                                   "at the end, and moving it will bring it in",
-                                   static_cast<double>(value),
-                                   static_cast<double>(field.min),
-                                   static_cast<double>(field.max));
-            }
-        }
-
-        ImGui::PopID();
     }
 
     if (!fields.Empty()) {
@@ -2488,7 +3571,12 @@ void DrawScript(eng::ScriptComponent& script) {
 
     // A list of what IS available, so a typo is one click from fixed rather
     // than a hunt through the scripts folder.
-    if (ImGui::BeginCombo("Bind to", script.ScriptName().c_str())) {
+    //
+    // LAID OUT BY HAND rather than with row::Combo, because BeginCombo's
+    // popup stays open across the call and a group cannot be closed around
+    // it. See the note at the end of FieldRow.h.
+    row::Label("Bind to");
+    if (ImGui::BeginCombo("##Bind to", script.ScriptName().c_str())) {
         if (eng::ScriptRegistry::Count() == 0) {
             ImGui::TextDisabled("no scripts are compiled into this build");
         }
@@ -2736,6 +3824,61 @@ void DrawComponentOverrides(const std::vector<eng::PrefabOverrideItem>& override
 
 } // namespace
 
+// ---------------------------------------------------------------------------
+//  One component's fields. See the note in InspectorPanel.h.
+//
+//  OUTSIDE THE ANONYMOUS NAMESPACE, so that the tile editor can call it; the
+//  draw functions it dispatches to are all inside one, which is why this sits
+//  immediately after it closes.
+// ---------------------------------------------------------------------------
+void DrawComponentBody(eng::Component& component, eng::Scene& scene, bool running) {
+    // Work out which kind of component this is and call the matching draw
+    // function. Comparing type NAMES is the same way the scene file
+    // identifies components.
+    const std::string_view type = component.TypeName();
+
+    if (type == eng::TransformComponent::kTypeName) {
+        DrawTransform(static_cast<eng::TransformComponent&>(component), running);
+    } else if (type == eng::SpriteComponent::kTypeName) {
+        DrawSprite(static_cast<eng::SpriteComponent&>(component));
+    } else if (type == eng::BoxColliderComponent::kTypeName ||
+               type == eng::CircleColliderComponent::kTypeName ||
+               type == eng::CapsuleColliderComponent::kTypeName ||
+               type == eng::PolygonColliderComponent::kTypeName ||
+               type == eng::EdgeColliderComponent::kTypeName ||
+               type == eng::TilemapColliderComponent::kTypeName) {
+        DrawCollider(static_cast<eng::ColliderComponent&>(component), scene);
+    } else if (type == eng::Rigidbody2DComponent::kTypeName) {
+        DrawRigidbody(static_cast<eng::Rigidbody2DComponent&>(component));
+    } else if (type == eng::TilemapComponent::kTypeName) {
+        DrawTilemap(static_cast<eng::TilemapComponent&>(component));
+    } else if (type == eng::SpriteAnimationComponent::kTypeName) {
+        DrawSpriteAnimation(static_cast<eng::SpriteAnimationComponent&>(component));
+    } else if (type == eng::SpinComponent::kTypeName) {
+        DrawSpin(static_cast<eng::SpinComponent&>(component));
+    } else if (type == eng::PlayerInputComponent::kTypeName) {
+        DrawPlayerInput(static_cast<eng::PlayerInputComponent&>(component));
+    } else if (type == eng::ScriptComponent::kTypeName) {
+        DrawScript(static_cast<eng::ScriptComponent&>(component));
+    } else if (type == eng::CameraComponent::kTypeName) {
+        DrawCamera(static_cast<eng::CameraComponent&>(component));
+    } else if (type == eng::UIRectComponent::kTypeName) {
+        DrawUIRect(static_cast<eng::UIRectComponent&>(component));
+    } else if (type == eng::UITextComponent::kTypeName) {
+        DrawUIText(static_cast<eng::UITextComponent&>(component));
+    } else if (type == eng::UIImageComponent::kTypeName) {
+        DrawUIImage(static_cast<eng::UIImageComponent&>(component));
+    } else if (type == eng::UIButtonComponent::kTypeName) {
+        DrawUIButton(static_cast<eng::UIButtonComponent&>(component));
+    } else if (type == eng::UISliderComponent::kTypeName) {
+        DrawUISlider(static_cast<eng::UISliderComponent&>(component));
+    } else {
+        // Not an error. Somebody may write their own component type, and the
+        // Inspector should say so rather than pretend it is not there.
+        ImGui::TextDisabled("no editor written for this component type yet");
+    }
+}
+
 void InspectorPanel::ApplyPendingRemoval() {
     if (!m_pendingRemoval.requested) {
         return;
@@ -2889,7 +4032,7 @@ bool DrawFilterChoice(eng::TextureFilter& filter) {
         eng::TextureFilterName(eng::TextureFilter::Linear),
     };
     int current = (filter == eng::TextureFilter::Linear) ? 1 : 0;
-    if (ImGui::Combo("Scaling", &current, names, 2)) {
+    if (row::Combo("Scaling", &current, names, 2)) {
         filter = (current == 1) ? eng::TextureFilter::Linear
                                 : eng::TextureFilter::Nearest;
         changed = true;
@@ -3412,21 +4555,21 @@ void DrawGridControls(SliceDraft& draft, const eng::TextureRef& texture,
 
     if (draft.byCount) {
         int counts[2] = {draft.columns, draft.rows};
-        if (ImGui::DragInt2("Across, down", counts, 0.2f, 1, 1024)) {
+        if (row::DragInt2("Across, down", counts, 0.2f, 1, 1024)) {
             draft.columns = counts[0];
             draft.rows    = counts[1];
         }
         ImGui::TextDisabled("the cell size is worked out from these");
     } else {
         int cell[2] = {draft.cellWidth, draft.cellHeight};
-        if (ImGui::DragInt2("Cell size", cell, 0.5f, 1, 4096)) {
+        if (row::DragInt2("Cell size", cell, 0.5f, 1, 4096)) {
             draft.cellWidth  = cell[0];
             draft.cellHeight = cell[1];
         }
     }
 
     int padding[2] = {draft.margin, draft.spacing};
-    if (ImGui::DragInt2("Margin, spacing", padding, 0.2f, 0, 1024)) {
+    if (row::DragInt2("Margin, spacing", padding, 0.2f, 0, 1024)) {
         draft.margin  = padding[0];
         draft.spacing = padding[1];
     }
@@ -3502,7 +4645,7 @@ void DrawFrameList(const std::string& path, eng::TextureImport& settings,
                             frame.x, frame.y, frame.w, frame.h)) {
             char name[64];
             std::snprintf(name, sizeof(name), "%s", frame.name.c_str());
-            if (ImGui::InputText("Name", name, sizeof(name),
+            if (row::InputText("Name", name, sizeof(name),
                                  ImGuiInputTextFlags_EnterReturnsTrue)) {
                 // ======================================================
                 //  THE ANIMATIONS HAVE TO FOLLOW, and this is the only
@@ -3643,14 +4786,14 @@ void DrawAnimationList(const std::string& path, eng::TextureImport& settings,
                                 animation.loop ? ", looping" : ", once")) {
                 char name[64];
                 std::snprintf(name, sizeof(name), "%s", animation.name.c_str());
-                if (ImGui::InputText("Name", name, sizeof(name),
+                if (row::InputText("Name", name, sizeof(name),
                                      ImGuiInputTextFlags_EnterReturnsTrue)) {
                     animation.name = name;
                     changed        = true;
                 }
 
                 float fps = animation.fps;
-                if (ImGui::InputFloat("Frames a second", &fps, 0.0f, 0.0f, "%.1f",
+                if (row::InputFloat("Frames a second", &fps, 0.0f, 0.0f, "%.1f",
                                       ImGuiInputTextFlags_EnterReturnsTrue)) {
                     // CLAMPED HERE RATHER THAN REFUSED BY Save. A rate of zero
                     // round-trips through the file perfectly well, so it is not
@@ -3660,13 +4803,13 @@ void DrawAnimationList(const std::string& path, eng::TextureImport& settings,
                 }
 
                 bool loop = animation.loop;
-                if (ImGui::Checkbox("Repeat for ever", &loop)) {
+                if (row::Checkbox("Repeat for ever", &loop)) {
                     animation.loop = loop;
                     changed        = true;
                 }
 
                 bool resume = animation.resume;
-                if (ImGui::Checkbox("Carry on where it left off", &resume)) {
+                if (row::Checkbox("Carry on where it left off", &resume)) {
                     animation.resume = resume;
                     changed          = true;
                 }
@@ -3764,7 +4907,7 @@ void DrawAnimationList(const std::string& path, eng::TextureImport& settings,
                     }
 
                     ImGui::SetNextItemWidth(160.0f);
-                    ImGui::Combo("##pick", &draft.pickedFrame, names.data(),
+                    row::Combo("##pick", &draft.pickedFrame, names.data(),
                                  static_cast<int>(names.size()));
                     ImGui::SameLine();
                     if (ImGui::SmallButton("Append")) {
@@ -3799,7 +4942,7 @@ void DrawAnimationList(const std::string& path, eng::TextureImport& settings,
 
     // ---- making one -------------------------------------------------------
     ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputTextWithHint("##newanimation", "walk", draft.newAnimation,
+    row::InputTextWithHint("##newanimation", "walk", draft.newAnimation,
                              sizeof(draft.newAnimation));
     ImGui::SameLine();
     ImGui::BeginDisabled(sheet.frames.empty() || draft.newAnimation[0] == '\0');
@@ -3894,7 +5037,7 @@ void DrawSheetSection(const std::string& path, eng::TextureImport& settings,
     //  which is the one thing that would make it appear not to stick.
     // ======================================================================
     bool marked = !(settings.sheet == eng::SheetSlice{});
-    if (ImGui::Checkbox("This image is a spritesheet", &marked)) {
+    if (row::Checkbox("This image is a spritesheet", &marked)) {
         if (!marked) {
             if (settings.sheet.frames.empty() && settings.sheet.animations.empty()) {
                 settings.sheet = eng::SheetSlice{};
@@ -4026,7 +5169,7 @@ void DrawSheetSection(const std::string& path, eng::TextureImport& settings,
 
     // ---- and the button that writes it down -------------------------------
     ImGui::SetNextItemWidth(120.0f);
-    ImGui::InputText("Name frames", draft.prefix, sizeof(draft.prefix));
+    row::InputText("Name frames", draft.prefix, sizeof(draft.prefix));
     ImGui::SameLine();
     ImGui::TextDisabled("%s0, %s1, ...", draft.prefix, draft.prefix);
 
@@ -4315,13 +5458,39 @@ void DrawAssetInspector(const std::string& path) {
             ImGui::TextDisabled("a prefab has no import settings.");
             ImGui::TextDisabled("double-click it to place one, then edit that.");
             return;
-        case AssetKind::Tile:
-            ImGui::TextDisabled("a tile's settings are its own file.");
-            ImGui::TextDisabled("double-click it to open the Tile Palette.");
+        case AssetKind::Tile: {
+            // ============================================================
+            //  THE ONE ASSET KIND THAT IS EDITED HERE RATHER THAN POINTED
+            //  AT, because a .otile IS its settings - there is no import
+            //  step and no entity to put one on. It used to say "open the
+            //  Tile Palette"; the palette became the selected tilemap's
+            //  own, and the file editor came here.
+            //
+            //  ONE EDITOR FOR THE WHOLE PANEL, held across frames because
+            //  it holds the edit buffer. Selecting a different .otile
+            //  loads it; selecting something else leaves it alone and
+            //  costs nothing.
+            // ============================================================
+            static TileAssetEditor editor;
+            editor.Draw(path, [](eng::Component& component) {
+                // THE SCENE IS ONLY FOR THE LAYER PICKER - DrawCollider
+                // gathers the collision layer names already in use so that a
+                // tile can be put on one of them by name rather than by
+                // typing it twice. `running` is false: a tile is a file, not
+                // a thing a system is moving.
+                if (eng::Scene* active = eng::Scene::Active()) {
+                    DrawComponentBody(component, *active, false);
+                }
+            });
             return;
+        }
         case AssetKind::Script:
             ImGui::TextDisabled("a script has no import settings.");
             ImGui::TextDisabled("its variables appear on the entity it is attached to.");
+            return;
+        case AssetKind::InputActions:
+            ImGui::TextDisabled("an action map file has no import settings.");
+            ImGui::TextDisabled("drop it on a Player Input, or open it in a text editor.");
             return;
         case AssetKind::Unknown:
             break;
@@ -4366,16 +5535,25 @@ void InspectorPanel::Draw() {
     //  NOT WHILE SOMETHING IS BEING DRAGGED, and that condition is the whole
     //  reason this branch is not simply "is a file selected".
     //
-    //  The Assets panel selects on mouse-DOWN - deliberately, so that a click
-    //  which turns into a drag still selects what it started from. That is the
-    //  SAME press that begins the drag. Without this test the Inspector
-    //  switched to the asset view the instant an image was picked up, taking
-    //  every drop target in it along too, so dragging an image from the Assets
-    //  panel onto an entity here was not awkward, it was impossible.
+    //  While something is in flight, what you need to see is the thing you
+    //  are dropping ONTO - so a file already being described here steps aside
+    //  for the entity for as long as the drag lasts. Without it, picking an
+    //  image and then dragging a second one onto an entity is impossible:
+    //  there is no entity on screen to aim at.
     //
-    //  While something is in flight, what you need to see is the thing you are
-    //  dropping ONTO. ImGui::IsDragDropActive is from imgui_internal.h, which
-    //  this file already includes for BeginDragDropTargetCustom.
+    //  IT USED TO BE DOING A SECOND JOB, and that job has gone to where it
+    //  belonged. The Assets panel picked on mouse-DOWN, which is the same
+    //  press that begins a drag, so this test was also what stopped the panel
+    //  flipping to the asset view the instant an image was picked up. It could
+    //  not cover the rest of that gesture: the press still clamped this
+    //  panel's scroll to the asset page's height on its way through, and the
+    //  drop only cleared the selection again when the window-wide target below
+    //  took the payload - never when a variable's own slot did. The Assets
+    //  panel now picks on the RELEASE and neither symptom exists; see the note
+    //  on it in AssetBrowserPanel.cpp.
+    //
+    //  ImGui::IsDragDropActive is from imgui_internal.h, which this file
+    //  already includes for BeginDragDropTargetCustom.
     // ======================================================================
     if (!state.selectedAsset.empty() && !ImGui::IsDragDropActive()) {
         // A COPY, NOT THE MEMBER. Three things inside DrawAssetInspector
@@ -4414,17 +5592,23 @@ void InspectorPanel::Draw() {
     if (ImGui::BeginDragDropTargetCustom(ImGui::GetCurrentWindow()->Rect(),
                                          ImGui::GetID("##inspector_drop"))) {
         std::string message;
-        for (const char* payloadId : {kPayloadTexture, kPayloadScript}) {
+        // A SEPARATE LIST from AcceptAssetDropOnEntity's, and it has to be
+        // kept in step by hand - the two do not share code. A kind missing
+        // here still works when dropped on the entity's row in the Hierarchy
+        // and does nothing when dropped on the Inspector, which reads as the
+        // panel being broken rather than as a missing case.
+        for (const char* payloadId : {kPayloadTexture, kPayloadScript, kPayloadInput}) {
             const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(payloadId);
             if (payload == nullptr) {
                 continue;
             }
             const auto* path = static_cast<const char*>(payload->Data);
 
-            // THE ENTITY IS WHAT THIS PANEL SHOULD DESCRIBE NOW. The file was
-            // selected on mouse-down, before the drag began; having landed it
-            // on an entity, what somebody wants to look at is the entity that
-            // just changed, not the file it came from.
+            // THE ENTITY IS WHAT THIS PANEL SHOULD DESCRIBE NOW. Whatever
+            // file was being looked at before, having just dropped something
+            // onto an entity what somebody wants to see is the entity that
+            // changed - and the drag is what was hiding the file, so without
+            // this the panel would snap back to it on the next frame.
             state.selectedAsset.clear();
 
             if (ApplyAssetToEntity(state.selected, path, message)) {
@@ -4509,7 +5693,7 @@ void InspectorPanel::Draw() {
     // them and the first place anybody looks.
     {
         bool active = entity->IsActiveSelf();
-        if (ImGui::Checkbox("##active", &active)) {
+        if (row::Checkbox("##active", &active)) {
             entity->SetActive(active);
             EditorState::Get().MarkDirty();
         }
@@ -4542,7 +5726,7 @@ void InspectorPanel::Draw() {
         std::snprintf(tagBuffer, sizeof(tagBuffer), "%s", tag.c_str());
 
         ImGui::SetNextItemWidth(130.0f);
-        if (ImGui::InputText("##tag", tagBuffer, sizeof(tagBuffer))) {
+        if (row::InputText("##tag", tagBuffer, sizeof(tagBuffer))) {
             entity->SetTag(tagBuffer);
             EditorState::Get().MarkDirty();
         }
@@ -4696,51 +5880,11 @@ void InspectorPanel::Draw() {
         }
 
         if (open) {
-            // Work out which kind of component this is and call the matching
-            // draw function. Comparing type NAMES is the same way the scene
-            // file identifies components.
-            const std::string_view type = typeName;
-
-            if (type == eng::TransformComponent::kTypeName) {
-                DrawTransform(static_cast<eng::TransformComponent&>(component), running);
-            } else if (type == eng::SpriteComponent::kTypeName) {
-                DrawSprite(static_cast<eng::SpriteComponent&>(component));
-            } else if (type == eng::BoxColliderComponent::kTypeName ||
-                       type == eng::CircleColliderComponent::kTypeName ||
-                       type == eng::CapsuleColliderComponent::kTypeName ||
-                       type == eng::PolygonColliderComponent::kTypeName ||
-                       type == eng::EdgeColliderComponent::kTypeName ||
-                       type == eng::TilemapColliderComponent::kTypeName) {
-                DrawCollider(static_cast<eng::ColliderComponent&>(component), scene);
-            } else if (type == eng::Rigidbody2DComponent::kTypeName) {
-                DrawRigidbody(static_cast<eng::Rigidbody2DComponent&>(component));
-            } else if (type == eng::TilemapComponent::kTypeName) {
-                DrawTilemap(static_cast<eng::TilemapComponent&>(component));
-            } else if (type == eng::SpriteAnimationComponent::kTypeName) {
-                DrawSpriteAnimation(
-                    static_cast<eng::SpriteAnimationComponent&>(component));
-            } else if (type == eng::SpinComponent::kTypeName) {
-                DrawSpin(static_cast<eng::SpinComponent&>(component));
-            } else if (type == eng::ScriptComponent::kTypeName) {
-                DrawScript(static_cast<eng::ScriptComponent&>(component));
-            } else if (type == eng::CameraComponent::kTypeName) {
-                DrawCamera(static_cast<eng::CameraComponent&>(component));
-            } else if (type == eng::UIRectComponent::kTypeName) {
-                DrawUIRect(static_cast<eng::UIRectComponent&>(component));
-            } else if (type == eng::UITextComponent::kTypeName) {
-                DrawUIText(static_cast<eng::UITextComponent&>(component));
-            } else if (type == eng::UIImageComponent::kTypeName) {
-                DrawUIImage(static_cast<eng::UIImageComponent&>(component));
-            } else if (type == eng::UIButtonComponent::kTypeName) {
-                DrawUIButton(static_cast<eng::UIButtonComponent&>(component));
-            } else if (type == eng::UISliderComponent::kTypeName) {
-                DrawUISlider(static_cast<eng::UISliderComponent&>(component));
-            } else {
-                // Not an error. Somebody may write their own component type,
-                // and the Inspector should say so rather than pretend it is
-                // not there.
-                ImGui::TextDisabled("no editor written for this component type yet");
-            }
+            // THE SAME FUNCTION A TILE'S COMPONENTS GO THROUGH. See the note
+            // above DrawComponentBody in InspectorPanel.h: an entity is no
+            // longer the only thing that carries components, and the two must
+            // not grow separate editors.
+            DrawComponentBody(component, scene, running);
 
             // AFTER the fields, so the list of what differs reads as a summary
             // of what is above it rather than as a header for it.

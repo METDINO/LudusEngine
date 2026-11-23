@@ -52,6 +52,16 @@ constexpr ObjectKind kKinds[] = {
      "An entity with a SpriteComponent, ready for an image to be dropped on "
      "it."},
 
+    // THE PAIR, because a map nothing can stand on is almost never what was
+    // wanted and adding the collider afterwards is a step people forget. The
+    // Tile Palette window used to have a "New Tilemap entity" button that did
+    // exactly this; the window is gone and creating things belongs here.
+    {"Tilemap", nullptr,
+     {eng::TilemapComponent::kTypeName, eng::TilemapColliderComponent::kTypeName,
+      nullptr, nullptr},
+     "A grid of tiles, and the collider that makes the solid ones solid. "
+     "Select it and its Tile Palette is in the Inspector."},
+
     // ---- the interface ---------------------------------------------------
     {"Text", "UI",
      {eng::UIRectComponent::kTypeName, eng::UITextComponent::kTypeName, nullptr,
@@ -153,6 +163,15 @@ eng::EntityId CreateObject(std::string_view kind) {
     // AFTER the components exist, because the defaults are set ON them.
     if (chosen->group != nullptr && std::string_view(chosen->group) == "UI") {
         ApplyUIDefaults(chosen->name, *entity);
+    }
+
+    // A NEW OBJECT IS ONE ORDINARY THING BIG. With no picture on it yet that
+    // is a unit square, and it is the size the collider added next will be a
+    // fraction of - so "+ Sprite, + BoxCollider" lands on something you can
+    // see rather than on whatever the first image dropped on it happens to
+    // be. See SpriteComponent::FitToWorldUnit and core/WorldUnit.h.
+    if (auto* sprite = entity->Find<eng::SpriteComponent>()) {
+        sprite->FitToWorldUnit();
     }
 
     return created;

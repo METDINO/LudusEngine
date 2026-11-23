@@ -2,10 +2,14 @@
   "_comment": "A documented copy of every setting the engine understands, with an explanation of each. The engine does NOT read this file - it reads config/engine.json next to it. Both are kept in the project: this one is the documentation, that one is the configuration.",
 
   "window": {
-    "_note": "The size the window opens at, and what appears in its title bar. The window can still be resized by dragging it.",
+    "_note": "The size the window opens at, and what appears in its title bar.",
+    "_resizable": "Whether the player may drag the window to any size. TRUE by default, which is what the engine has always done. False pins it to the width and height here - useful when a pinned presentation has one right scale and a hundred wrong ones. ONLY THE GAME OBEYS IT: the editor hosts the same engine and never locks its own window.",
+    "_fullscreen": "Borderless full screen, keeping the desktop's own mode. Works with a pinned presentation, because whatever space the shape does not fill is black.",
     "title": "Engine2D",
     "width": 1280,
-    "height": 720
+    "height": 720,
+    "resizable": true,
+    "fullscreen": false
   },
 
   "logging": {
@@ -26,6 +30,17 @@
 
     "_gizmoCircleSegments": "How many short straight lines a drawn circle is made of. More looks rounder.",
     "gizmoCircleSegments": 24
+  },
+
+  "units": {
+    "_note": "HOW BIG 'ONE' IS, in pixels. One tile, one standing character's width, one grid square - whatever your project's ordinary thing is. 32 is this project's tile size.",
+    "_why": "Colliders are authored as a fraction of it: a scale of [1,1] means 'the size of the sprite this is attached to', or one unit square when there is no sprite, and [0.5,1] means half as wide and full height. Those numbers still mean the right thing after you redraw the art at twice the resolution; pixel counts typed into every scene file do not. The editor also creates new objects one unit across, whatever size their picture happens to be.",
+    "pixelsPerUnit": 32
+  },
+
+  "presentation": {
+    "_note": "WHAT SHAPE THE FINISHED GAME IS. \"free\" lets it fill the window, which means a wider monitor sees MORE OF THE LEVEL - fine while building, wrong for shipping. A ratio like \"16:9\" pins the shape; a size like \"1920x1080\" pins the exact pixels, which is what makes pixel art land on the same grid everywhere. Whatever space is left over is filled with BLACK, so full screen on a differently-shaped display still works.",
+    "mode": "free"
   },
 
   "physics": {

@@ -34,9 +34,14 @@
 //  ever. Focus has to be requested from outside the panel that needs it.
 // ============================================================================
 
+#include "EditorGui.h"
+#include "GameViewLayout.h"
 #include "Panel.h"
 
 #include <engine/Engine.h>
+
+#include <cstddef>
+#include <vector>
 
 namespace editor {
 
@@ -47,7 +52,14 @@ public:
 
     // Behind another tab, so it does not have the keyboard whatever it decided
     // last frame. See Panel::OnHidden - this is the bug that hook exists for.
-    void OnHidden() override { m_focused = false; }
+    // Closed, collapsed, or a background tab in its dock node - Draw did not
+    // run, so the keyboard goes back to the editor and there is no rectangle
+    // for a click to land in. The two are given up together: a stale
+    // rectangle would post clicks on whatever is drawn there now to the game.
+    void OnHidden() override {
+        m_focused = false;
+        EditorGui::ClearGameViewArea();
+    }
 
     // Called by EditorApp after every panel has drawn. See ScenePanel.h for
     // why drawing the world cannot happen inside Draw().
@@ -55,9 +67,64 @@ public:
 
     bool HasFocus() const { return m_focused; }
 
+    // ======================================================================
+    //  WHAT SHAPE THE GAME IS RENDERED AT, and how big it is shown.
+    //
+    //  THESE ARE THE PERSON'S HALF, which is the only reason they are public:
+    //  EditorSession writes them into .editor/session.json. Retyping
+    //  "1366:768" every session is worse than not having the feature, and how
+    //  large the preview is drawn on one monitor is nobody else's business.
+    //
+    //  WHICH SHAPE IS CHOSEN IS NOT HERE. That is the project's, it lives in
+    //  config/engine.json, and it is read back by SyncChosenFromProject() -
+    //  see ProjectSettings.h for the split and why keeping it in the session
+    //  file was the bug this panel was changed to fix.
+    //
+    //  See GameViewLayout.h for what the three kinds mean and why the scale
+    //  is a separate number from the resolution.
+    // ======================================================================
+    const std::vector<GameViewMode>& Modes() const { return m_modes; }
+    float                            Scale() const { return m_scale; }
+    void                             SetScale(float scale) { m_scale = scale; }
+
+    // How many of Modes() are built in. Everything at or past it is custom
+    // and can be removed.
+    std::size_t BuiltInCount() const { return m_builtInCount; }
+    void        AddCustomMode(const GameViewMode& mode);
+
 private:
+    // The toolbar row above the picture: the camera, the aspect dropdown and
+    // the scale. Split out because Draw was already the longest function in
+    // the panel and this doubled it.
+    void DrawControls();
+
+    // Writes the chosen shape into config/engine.json, which is what makes
+    // the dropdown the GAME's output rather than a preview. See the note on
+    // the definition.
+    void ApplyChosenModeToProject();
+
+    // Selects whatever config/engine.json asks for, once, on the first draw.
+    // See the note on the definition for why not in the constructor.
+    void SyncChosenFromProject();
+
     eng::RenderTarget m_target;
     bool              m_focused = false;
+
+    std::vector<GameViewMode> m_modes        = BuiltInGameViewModes();
+    std::size_t               m_builtInCount = m_modes.size();
+    std::size_t               m_chosen       = 0;   // Free Aspect
+    float                     m_scale        = kFitScale;
+
+    // What the custom-entry box holds while it is being typed into.
+    char m_customText[32] = "";
+    char m_customError[96] = "";
+
+    // Why a project setting could not be written - a read-only checkout, say.
+    // Shown in the panel rather than only logged: a control that silently
+    // does not stick is worse than one that refuses out loud.
+    char m_settingError[192] = "";
+
+    bool m_syncedFromProject = false;
 };
 
 } // namespace editor

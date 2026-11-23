@@ -8,8 +8,10 @@
 #include <engine/scene/ScriptFields.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <limits>
+#include <string_view>
 
 namespace eng {
 namespace {
@@ -54,6 +56,7 @@ const char* ScriptFieldTypeName(ScriptFieldType type) {
         case ScriptFieldType::Prefab: return "prefab";
         case ScriptFieldType::Animation: return "animation";
         case ScriptFieldType::Image:     return "image";
+        case ScriptFieldType::GameObject: return "game object";
     }
     return "unknown";
 }
@@ -98,6 +101,11 @@ AnimationRef* ScriptField::AsAnimationRef() const {
 
 ImageRef* ScriptField::AsImageRef() const {
     return type == ScriptFieldType::Image ? static_cast<ImageRef*>(value) : nullptr;
+}
+
+GameObjectRef* ScriptField::AsGameObjectRef() const {
+    return type == ScriptFieldType::GameObject ? static_cast<GameObjectRef*>(value)
+                                               : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +154,45 @@ void ScriptFields::Add(std::string_view name, ScriptFieldType type, void* value,
     field.ranged  = ranged;
     field.min     = min;
     field.max     = max;
+
+    // ======================================================================
+    //  IS THIS ONE ELEMENT OF AN ARRAY? Asked once, here.
+    //
+    //  See the note on ScriptField::arrayName for why the answer is read off
+    //  the name rather than threaded through this function's parameters - and
+    //  for why reading it is sound: a C++ identifier cannot contain a bracket,
+    //  so "walkAnimations[2]" can only have come from the array loop the
+    //  editor generates, or from somebody writing that shape into Var() by
+    //  hand, which means the same thing.
+    //
+    //  DIGITS ONLY, and at least one. "a[]" and "a[i]" are not elements of
+    //  anything this can group, and treating them as such would put a row
+    //  under a header whose index could not be shown.
+    // ======================================================================
+    if (field.name.size() > 3 && field.name.back() == ']') {
+        const std::size_t open = field.name.rfind('[');
+        if (open != std::string::npos && open > 0 &&
+            open + 1 < field.name.size() - 1) {
+            const std::string_view digits(field.name.data() + open + 1,
+                                          field.name.size() - open - 2);
+            const bool allDigits =
+                std::all_of(digits.begin(), digits.end(),
+                            [](const char c) { return c >= '0' && c <= '9'; });
+
+            // A LENGTH THAT WILL NOT FIT AN int is not an array index; it is a
+            // name that happens to end in a very long number. from_chars says
+            // so rather than wrapping, which is the whole reason it is used
+            // here instead of std::stoi - that one THROWS, and this is called
+            // while a scene is loading.
+            int index = 0;
+            if (allDigits &&
+                std::from_chars(digits.data(), digits.data() + digits.size(), index)
+                        .ec == std::errc{}) {
+                field.arrayName  = field.name.substr(0, open);
+                field.arrayIndex = index;
+            }
+        }
+    }
 
     // A range with its ends the wrong way round, or both the same, would draw
     // a slider that cannot move. Reported and demoted to an ordinary drag box,
@@ -289,6 +336,23 @@ const ScriptField* ScriptFields::Find(std::string_view name) const {
     return it != m_fields.end() ? &*it : nullptr;
 }
 
+std::size_t ScriptFields::ArrayLength(std::string_view arrayName) const {
+    if (arrayName.empty()) {
+        return 0;
+    }
+
+    // COUNTED, NOT "the highest index plus one". The two agree for anything
+    // the generated exposer produces, which always emits 0..n-1 in order -
+    // but a HAND-WRITTEN OnExpose may list only the elements it cares about,
+    // and in that case the number of rows there are to draw is the number of
+    // rows there are, not the largest label among them.
+    return static_cast<std::size_t>(
+        std::count_if(m_fields.begin(), m_fields.end(),
+                      [arrayName](const ScriptField& field) {
+                          return field.arrayIndex >= 0 && field.arrayName == arrayName;
+                      }));
+}
+
 // ---------------------------------------------------------------------------
 //  JSON
 // ---------------------------------------------------------------------------
@@ -309,6 +373,35 @@ bool JsonFitsFieldType(ScriptFieldType type, const Json& value) {
             // is different: it is as likely to be a leftover from a count as
             // an intended true, and guessing would hide the mistake.
             return value.is_boolean();
+
+        case ScriptFieldType::GameObject:
+            // ==============================================================
+            //  THE ONE FIELD WHOSE VALUE IS AN OBJECT.
+            //
+            //  { "entity": "Door" } or { "prefab": "prefabs/bullet.oprefab" },
+            //  because this is the one reference that cannot say which half
+            //  it is from the text alone. A bare string is accepted too and
+            //  read as an ENTITY NAME - that is what somebody hand-editing a
+            //  scene will type, and it is the harmless half to guess: a name
+            //  that resolves to nothing is visible in the Inspector, whereas
+            //  a path guessed wrong would be a spawner that silently spawns
+            //  nothing. See scene/GameObjectRef.h.
+            // ==============================================================
+            if (value.is_string()) {
+                return true;
+            }
+            if (!value.is_object()) {
+                return false;
+            }
+            // AN EMPTY OBJECT IS WHAT AN UNSET ONE WRITES, so it has to read
+            // back - otherwise a variable nobody filled in fails to load the
+            // moment it has been saved once. It means "nothing", which is
+            // exactly what it came from.
+            if (!value.contains("entity") && !value.contains("prefab")) {
+                return value.empty();
+            }
+            return (value.contains("entity") && value["entity"].is_string()) ||
+                   (value.contains("prefab") && value["prefab"].is_string());
 
         case ScriptFieldType::String:
         case ScriptFieldType::Entity:
@@ -369,6 +462,10 @@ bool ReadFieldFromJson(const ScriptField& field, const Json& value,
                 outError += " written as the prefab's path, like "
                             "\"prefabs/bullet.oprefab\"";
                 break;
+            case ScriptFieldType::GameObject:
+                outError += " written as { \"entity\": \"Door\" } or "
+                            "{ \"prefab\": \"prefabs/bullet.oprefab\" }";
+                break;
             default:
                 break;
         }
@@ -424,6 +521,20 @@ bool ReadFieldFromJson(const ScriptField& field, const Json& value,
             case ScriptFieldType::Image:
                 field.AsImageRef()->Set(value.get<std::string>());
                 return true;
+
+            case ScriptFieldType::GameObject: {
+                GameObjectRef* ref = field.AsGameObjectRef();
+                if (value.is_string()) {
+                    ref->SetSceneObject(value.get<std::string>());
+                } else if (value.contains("prefab")) {
+                    ref->SetPrefab(value["prefab"].get<std::string>());
+                } else if (value.contains("entity")) {
+                    ref->SetSceneObject(value["entity"].get<std::string>());
+                } else {
+                    ref->Clear();
+                }
+                return true;
+            }
 
             case ScriptFieldType::Vec2:
                 *field.AsVec2() = Vec2{value[0].get<float>(), value[1].get<float>()};
@@ -490,6 +601,25 @@ Json FieldToJson(const ScriptField& field) {
             // somebody chose is written out as null, which a prefab instance
             // reads as "erase this field".
             return Json(field.AsImageRef()->Path());
+
+        case ScriptFieldType::GameObject: {
+            // THE KIND IS WRITTEN DOWN, not inferred on the way back in. A
+            // rule like "does it end in .oprefab" would work until somebody
+            // named an entity after a file, and the failure would be a
+            // spawner that silently spawns nothing.
+            //
+            // AND AN UNSET ONE IS AN EMPTY OBJECT, not a null. A null is read
+            // by a prefab instance as "erase this field" - see the warning on
+            // the two arms above, which this one would otherwise repeat.
+            const GameObjectRef* ref = field.AsGameObjectRef();
+            Json                 out = Json::object();
+            if (ref->IsPrefab()) {
+                out["prefab"] = ref->PrefabPath();
+            } else if (ref->IsSceneObject()) {
+                out["entity"] = ref->Name();
+            }
+            return out;
+        }
 
         case ScriptFieldType::Vec2: {
             const Vec2 v = *field.AsVec2();

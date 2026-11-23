@@ -34,6 +34,7 @@
 #include <engine/fs/AssetArchive.h>
 #include <engine/fs/FileSystem.h>
 #include <engine/input/InputMap.h>
+#include <engine/input/PlayerInputComponent.h>
 #include <engine/input/Pointer.h>
 #include <engine/math/Mat3.h>
 #include <engine/math/Overlap.h>
@@ -52,6 +53,7 @@
 #include <engine/resource/ResourceManager.h>
 #include <engine/scene/BuildScenes.h>
 #include <engine/scene/CameraComponent.h>
+#include <engine/scene/ComponentAliases.h>
 #include <engine/scene/Component.h>
 #include <engine/scene/DeferredOps.h>
 #include <engine/scene/Entity.h>
@@ -153,9 +155,29 @@
 typedef eng::ScriptBehaviour MyScriptBehaviour;
 typedef eng::Vec2 Vector2;
 
-// Unity's name for an entity. A pointer, like the component aliases below:
-// `GameObject self = Owner();`
-typedef eng::Entity* GameObject;
+// ============================================================================
+//  UNITY'S NAME FOR A THING, AND IT TAKES EITHER KIND OF THING.
+//
+//  `GameObject self = Owner();` still means what it meant - the type converts
+//  to Entity* implicitly and has operator-> - but it is no longer a bare
+//  pointer, and that change is what makes it usable as a VARIABLE.
+//
+//  A pointer is the one thing the Inspector cannot draw: an address has
+//  nothing to put in a box, so the variable exposer skipped it and said so.
+//  `GameObject target;` was therefore a field you could declare and never
+//  see. As a value it is a slot you drag onto - and it accepts a scene object
+//  from the Hierarchy OR a prefab from the Assets panel, which is what
+//  Unity's GameObject field does and the reason prefabs and scene objects no
+//  longer need to be referenced through two different types.
+//
+//  THE COMPONENT ALIASES BELOW MADE THIS SAME MOVE FIRST, from pointer
+//  typedefs to eng::ComponentRef, for the same reason and with the same
+//  conversion kept. The note under them has the full argument.
+//
+//  See scene/GameObjectRef.h for what a prefab one resolves to - nothing,
+//  until you Instantiate it - and why that is the honest answer.
+// ============================================================================
+using GameObject = eng::GameObjectRef;
 
 // ============================================================================
 //  UNITY'S COMPONENT NAMES, AND THEY ARE REFERENCES
@@ -213,6 +235,69 @@ typedef eng::ComponentRef<eng::TransformComponent> TransformRef;
 typedef eng::ComponentRef<eng::SpriteComponent> SpriteRenderer;
 
 // ============================================================================
+//  THE REST OF THEM, because three out of nineteen was not a scheme.
+//
+//  Rigidbody2D, SpriteRenderer and TransformRef were the only components with
+//  a friendly name, and the gap was not benign: somebody who learns
+//  `SpriteRenderer renderer;` reasonably writes `SpriteAnimator anim;` next,
+//  and got `error C3646: unknown override specifier` with no suggestion. The
+//  component they most often wanted - SpriteAnimationComponent - was among
+//  the missing sixteen.
+//
+//  THE RULE, and it is worth stating because the names are not uniform:
+//
+//    Unity's own spelling where Unity has one and it is safe - every
+//    concrete collider, and Tilemap.
+//
+//    The house `...Ref` spelling where Unity's name cannot be used. That is
+//    EntityRef, PrefabRef, ImageRef, AnimationRef, TransformRef and now
+//    CameraRef and the UI ones.
+//
+//  WHY CameraRef AND NOT Camera: eng::Camera is a real class - the view
+//  transform the renderer takes - and scripts say `using namespace eng;`, so a
+//  global `Camera` would make the name ambiguous in every script. Same family
+//  of problem as Transform, different cause: that one is hidden by an
+//  inherited member function, this one collides with a type.
+//
+//  WHY THE UI ONES KEEP THE UI PREFIX: Unity calls them Button, Image, Slider
+//  and Text. Those are far too general to put at global scope in a header
+//  every script includes - somebody's own `class Text` would stop compiling -
+//  and `Image` would sit confusingly beside ImageRef, which is an image ASSET
+//  rather than a component. UIButtonRef and friends match the component names
+//  they wrap.
+//
+//  AND WHY THERE IS NO ScriptComponent ONE: a reference to "whichever script
+//  happens to be on that entity" is not a useful question, and asking it finds
+//  an arbitrary one of them. A reference to a PARTICULAR script is that
+//  script's own bare name - see scene/ScriptRef.h - which is the spelling this
+//  whole block is modelled on.
+// ============================================================================
+
+typedef eng::ComponentRef<eng::SpriteAnimationComponent> SpriteAnimator;
+typedef eng::ComponentRef<eng::CameraComponent>          CameraRef;
+typedef eng::ComponentRef<eng::TilemapComponent>         Tilemap;
+typedef eng::ComponentRef<eng::SpinComponent>            SpinRef;
+
+// Unity's own spelling for this one, and it was free.
+typedef eng::ComponentRef<eng::PlayerInputComponent>     PlayerInput;
+
+// The concrete colliders. Unity's names exactly, and the abstract base is
+// deliberately absent - see the note below on why Collider2D is a pointer.
+typedef eng::ComponentRef<eng::BoxColliderComponent>     BoxCollider2D;
+typedef eng::ComponentRef<eng::CircleColliderComponent>  CircleCollider2D;
+typedef eng::ComponentRef<eng::CapsuleColliderComponent> CapsuleCollider2D;
+typedef eng::ComponentRef<eng::EdgeColliderComponent>    EdgeCollider2D;
+typedef eng::ComponentRef<eng::PolygonColliderComponent> PolygonCollider2D;
+typedef eng::ComponentRef<eng::TilemapColliderComponent> TilemapCollider2D;
+
+// The UI components.
+typedef eng::ComponentRef<eng::UIRectComponent>   UIRectRef;
+typedef eng::ComponentRef<eng::UIImageComponent>  UIImageRef;
+typedef eng::ComponentRef<eng::UITextComponent>   UITextRef;
+typedef eng::ComponentRef<eng::UIButtonComponent> UIButtonRef;
+typedef eng::ComponentRef<eng::UISliderComponent> UISliderRef;
+
+// ============================================================================
 //  COLLIDER STAYS A POINTER, and it is the engine that decides that, not a
 //  preference.
 //
@@ -237,8 +322,6 @@ typedef eng::ComponentRef<eng::SpriteComponent> SpriteRenderer;
 typedef eng::ColliderComponent* Collider2D;
 
 typedef eng::InputMap Input;
-//using GameObject = eng::Entity;
-//using GameObject = eng::PrefabRef;
 
 using namespace eng;
 namespace eng {
@@ -287,6 +370,26 @@ public:
         // ------------------------------------------------------------------
         std::function<bool()> guiInit;
         std::function<void()> guiShutdown;
+
+        // ==================================================================
+        //  TRUE FOR THE GAME, FALSE FOR A TOOL THAT HOSTS IT.
+        //
+        //  The player sets it; the editor does not. It gates the settings
+        //  that describe THE PLAYER'S WINDOW - full screen, and whether the
+        //  window may be resized - because those are statements about the
+        //  shipped game and are absurd applied to an editor: a project that
+        //  ships full screen at a locked 1280x720 would otherwise open the
+        //  EDITOR full screen at a locked 1280x720, with no way back except
+        //  hand-editing the settings file.
+        //
+        //  DEFAULT FALSE, so a host that does not think about this gets the
+        //  harmless answer. The player is the one place that opts in.
+        //
+        //  It does NOT gate the presentation shape itself. That is read
+        //  either way, because the editor's Game view wants to show you what
+        //  the setting does - see render/Presentation.h.
+        // ==================================================================
+        bool gameOwnsTheWindow = false;
     };
 
     // There is exactly one engine. Get() returns it.
@@ -335,6 +438,24 @@ public:
     GameClock&        Clock()        { return m_clock; }
     Scene&            GetScene()     { return *m_scene; }
     const BootConfig& Config() const { return m_config; }
+
+    // ======================================================================
+    //  TWO SETTINGS THE EDITOR CAN CHANGE WHILE RUNNING.
+    //
+    //  The settings file is read ONCE, at start-up, which is right for almost
+    //  everything in it - but these two are edited from the Game view, and a
+    //  setting you cannot see take effect until you restart is a setting
+    //  nobody trusts. The editor writes the file and then says so here, so
+    //  Config() goes on being the one answer to "what does this project ask
+    //  for" rather than becoming stale the moment somebody changes it.
+    //
+    //  NEITHER TOUCHES THE WINDOW. Applying them is a separate decision and
+    //  belongs to the game - see Options::gameOwnsTheWindow.
+    // ======================================================================
+    void SetPresentationSetting(std::string_view spec) {
+        m_config.presentation = std::string(spec);
+    }
+    void SetWindowResizableSetting(bool on) { m_config.windowResizable = on; }
 
     // Loads a different scene at a safe moment, applying the camera settings
     // the scene file asked for.
@@ -418,6 +539,12 @@ private:
     // records them - nothing runs until Init calls SubsystemStack::InitAll.
     void RegisterBuiltinSubsystems(const Options& options);
 
+    // Puts the loaded scene's framing on the camera, whichever of the two
+    // ways it was written - a zoom or a frame height. Two call sites, loading
+    // a scene and leaving play mode, which were already two copies of the
+    // position-and-zoom pair. See render/Camera.h.
+    void ApplySceneCamera();
+
     // ------------------------------------------------------------------
     //  FIVE SUBSYSTEMS THAT BELONG TO THE ENGINE ITSELF.
     //
@@ -500,6 +627,10 @@ private:
     std::unique_ptr<ScriptSystem>    m_scriptSystem;
     std::unique_ptr<SpriteAnimationSystem> m_animationSystem;
 
+    // Keeps each tilemap's tile objects matching its cells. See the note
+    // above TilemapComponent::SyncTileObjects for what those are.
+    std::unique_ptr<TileObjectSystem> m_tileObjectSystem;
+
     // Copies the active camera entity into m_camera once a frame. Registered
     // with the scheduler like the others, so its place in the frame is one
     // number rather than a call buried somewhere - see CameraComponent.h.
@@ -509,11 +640,31 @@ private:
     Camera    m_camera;
     GameClock m_clock;
 
+    // Where the game is drawn when its shape is pinned, before being placed
+    // on the window with black around it. Never created at all while the
+    // presentation is Free, which is the default - see RenderFrame.
+    RenderTarget m_presentTarget;
+
     double m_lastFrameTicks = 0.0;
     int    m_stepsThisFrame = 0;
     bool   m_initialised    = false;
     bool   m_quitRequested  = false;
     bool   m_inPlayMode     = false;
+
+    // ======================================================================
+    //  DID THE SCRIPTS UPDATE THIS FRAME? Decided once in Simulate, read again
+    //  in PresentFrame, so the per-frame update and the end-of-frame coroutine
+    //  pass can never disagree about whether this frame ran.
+    //
+    //  ASKING THE QUESTION TWICE WOULD BE WRONG, not merely untidy. The gate is
+    //  `!m_clock.IsPaused() || m_stepsThisFrame > 0`, and the Toolbar's Pause
+    //  button runs BETWEEN the two - it is drawn in EditorApp::DrawPanels, after
+    //  Simulate and before PresentFrame. A game playing at a time scale of zero
+    //  has m_stepsThisFrame == 0, so one click there would flip the second
+    //  reading to false and strand every WaitForEndOfFrame coroutine for a
+    //  frame. See ToolbarPanel.cpp and Engine::Simulate.
+    // ======================================================================
+    bool m_scriptsUpdatedThisFrame = false;
 
     // The scene as it was when Play was pressed, so Stop can put it back.
     std::string m_playModeSnapshot;

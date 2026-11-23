@@ -29,6 +29,7 @@
 #include <engine/core/Json.h>
 #include <engine/math/Vec2.h>
 #include <engine/core/Log.h>
+#include <engine/core/WorldUnit.h>
 
 #include <string>
 #include <string_view>
@@ -52,6 +53,54 @@ struct BootConfig {
     int         gizmoCircleSegments  = 24;      // how round a drawn circle looks
     float       fixedTimestepSeconds = 1.0f / 60.0f;
     int         maxStepsPerFrame     = 5;
+
+    // "window" -> "fullscreen". Borderless, keeping the desktop's own mode;
+    // see platform/Window.h for why that rather than a display mode change.
+    bool        fullscreen = false;
+
+    // ======================================================================
+    //  "window" -> "resizable". May the player drag the window to any size?
+    //
+    //  TRUE BY DEFAULT, which is what the engine has always done - so no
+    //  existing project changes by this key arriving.
+    //
+    //  WHY TURNING IT OFF IS A REAL REQUEST. Letterboxing keeps a pinned
+    //  shape correct at any window size, so resizing is no longer BROKEN -
+    //  but a game can still want to forbid it. A fixed window is part of a
+    //  look: a 480x270 pixel game presented at exactly 3x has a right answer
+    //  and a hundred wrong ones, and leaving the player to find the right one
+    //  by dragging is not a style decision anybody wants to delegate.
+    //
+    //  ONLY THE GAME OBEYS IT. The editor hosts the same engine and must not
+    //  lock its own window because a project said so - see
+    //  Engine::Options::gameOwnsTheWindow.
+    // ======================================================================
+    bool        windowResizable = true;
+
+    // ======================================================================
+    //  "presentation" -> "mode": "free", "16:9" or "1920x1080".
+    //
+    //  WHAT SHAPE THE FINISHED GAME IS. Free - the default, and what the
+    //  engine did before this existed - lets the game fill the window, which
+    //  means a wider monitor sees MORE OF THE LEVEL. Pinning a shape or a
+    //  size fixes the framing for every player and puts black in whatever
+    //  space is left over.
+    //
+    //  KEPT AS TEXT rather than parsed into this struct, because the one
+    //  parser lives in render/Presentation.h and the editor's own
+    //  custom-aspect box calls the same one. Two copies of "what does 16:9
+    //  mean" is exactly the drift worth avoiding.
+    // ======================================================================
+    std::string presentation = "free";
+
+    // "units" - how many pixels one world unit is.
+    //
+    // The size of an ordinary thing: one tile, one character's width, one
+    // grid square. Authored sizes are written as fractions of it, so they
+    // survive a change of art resolution. See core/WorldUnit.h for why that
+    // is worth a setting of its own, and physics/Collider.h for what reads
+    // it.
+    float       worldUnitPixels = WorldUnit::kDefaultPixels;
 
     // "physics"
     //

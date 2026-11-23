@@ -6,12 +6,14 @@
 #include "panels/AssetBrowserPanel.h"
 
 #include "AssetDragDrop.h"
+#include "AssetRefs.h"
 #include "EditorApp.h"
 #include "ShellOpen.h"
 #include "ScriptBuild.h"
 #include "ScriptTemplate.h"
 #include "panels/HierarchyPanel.h"   // kPayloadEntity, for an entity dropped in here
-#include "panels/TilePalettePanel.h"
+#include "panels/InputActionsPanel.h"   // CreateDefault, for "+ Input"
+#include "TilePaint.h"
 
 #include <engine/resource/ImportSettings.h>
 #include <engine/scene/Prefab.h>
@@ -81,6 +83,7 @@ ImVec4 ColourFor(AssetKind kind) {
         case AssetKind::Font:    return ImVec4(0.88f, 0.70f, 0.95f, 1.0f);
         case AssetKind::Tile:    return ImVec4(0.55f, 0.92f, 0.85f, 1.0f);
         case AssetKind::Prefab:  return ImVec4(0.55f, 0.78f, 0.95f, 1.0f);
+        case AssetKind::InputActions: return ImVec4(0.95f, 0.72f, 0.55f, 1.0f);
         case AssetKind::Unknown: break;
     }
     return ImVec4(0.62f, 0.62f, 0.66f, 1.0f);
@@ -94,6 +97,7 @@ const char* LabelFor(AssetKind kind) {
         case AssetKind::Font:    return "TTF";
         case AssetKind::Tile:    return "TILE";
         case AssetKind::Prefab:  return "PFB";
+        case AssetKind::InputActions: return "INP";
         case AssetKind::Unknown: break;
     }
     return "---";
@@ -650,6 +654,37 @@ void AssetBrowserPanel::DrawBreadcrumb() {
         std::snprintf(m_newScriptName, sizeof(m_newScriptName), "%s", "NewScript");
     }
     ImGui::SameLine();
+    if (ImGui::SmallButton("+ Input")) {
+        // STRAIGHT TO assets/input/ AND NOT THE FOLDER BEING BROWSED, unlike
+        // + Script and + Tile. A Player Input component names a path, the
+        // engine's own default and every example put them in one place, and a
+        // file somewhere else works but is the kind of difference nobody
+        // remembers choosing. WriteTextFile makes the folder if it has to.
+        //
+        // Named with a number when the obvious name is taken, rather than
+        // refusing: a button that does nothing until you go and read an error
+        // is a button that looks broken.
+        std::string path  = "input/PlayerControls.oinput";
+        int         spare = 2;
+        while (eng::FileSystem::Exists(path) && spare < 100) {
+            path = "input/PlayerControls" + std::to_string(spare) + ".oinput";
+            ++spare;
+        }
+
+        std::string error;
+        if (!InputActionsPanel::CreateDefault(path, error)) {
+            ENGINE_LOG_ERROR(eng::Channels::kEditor, "{}", error);
+        } else {
+            Refresh();
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A new action maps file in assets/input/, bound to the\n"
+                          "same controls config/engine.json already binds.\n"
+                          "Opens in the Input Actions window.");
+    }
+
+    ImGui::SameLine();
     if (ImGui::SmallButton("+ Tile")) {
         m_openNewTile = true;
 
@@ -992,11 +1027,15 @@ void AssetBrowserPanel::DrawEntry(const Tile& tile, int index) {
                 ImGui::TextDisabled("double-click to open");
                 break;
             case AssetKind::Tile:
-                ImGui::TextDisabled("double-click to edit it in the Tile Palette");
+                ImGui::TextDisabled("double-click to edit it in the Inspector");
                 break;
             case AssetKind::Prefab:
                 ImGui::TextDisabled("drag into the Scene view, onto an entity, or "
                                     "double-click to place one");
+                break;
+            case AssetKind::InputActions:
+                ImGui::TextDisabled("drag onto an entity to give it a Player Input, "
+                                    "or double-click to edit the file");
                 break;
             case AssetKind::Unknown:
                 break;
@@ -1004,10 +1043,36 @@ void AssetBrowserPanel::DrawEntry(const Tile& tile, int index) {
         ImGui::EndTooltip();
     }
 
-    // A SINGLE CLICK SELECTS, which is what gives the Delete key something to
-    // act on. Taken on mouse-DOWN rather than release, so a click that turns
-    // into a drag still selects what it started from.
-    if (iconHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // ======================================================================
+    //  A SINGLE CLICK SELECTS, which is what gives the Delete key something
+    //  to act on - AND IT IS THE RELEASE THAT COUNTS, not the press.
+    //
+    //  This used to pick on mouse-DOWN, so that a click which turned into a
+    //  drag still selected what it started from. That press is the SAME press
+    //  that begins a drag, and picking on it published the file to the
+    //  Inspector before anybody knew whether a drag was happening:
+    //
+    //    - the Inspector redrew as the asset view for the frame or two before
+    //      the drag passed its threshold, which clamped the panel's scroll to
+    //      that much shorter page - so dragging an image onto a variable threw
+    //      the Inspector back to the top on the way;
+    //    - and the drop only cleared it again if the WINDOW-WIDE target took
+    //      the payload. Dropping onto a variable's own slot is a field target,
+    //      which never touched selectedAsset - so the Inspector flipped to
+    //      the dragged file the moment the drag ended, hiding the entity whose
+    //      variable had just been filled in.
+    //
+    //  Waiting for the release answers both at once, because a drag does not
+    //  end over the tile it started on. IsItemHovered is false on the release
+    //  frame when the cursor is somewhere else, and ImGui blocks it on other
+    //  tiles while a drag is active - so releasing on the grabbed tile picks
+    //  it and releasing anywhere else picks nothing.
+    //
+    //  THE OTHER TWO DOORS ARE UNCHANGED: a right-click still picks through
+    //  DrawEntryContextMenu, so the menu acts on what it is over, and a
+    //  double-click still opens.
+    // ======================================================================
+    if (iconHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         Pick(tile);
     }
 
@@ -1038,12 +1103,20 @@ void AssetBrowserPanel::DrawEntry(const Tile& tile, int index) {
             EditorState::Get().requestedScene = tile.path;
         } else if (kind == AssetKind::Tile) {
             // A .otile is JSON, so the system editor WOULD open it - but the
-            // Tile Palette can show the sheet, every one of the 47 shapes it
+            // Inspector can show the sheet, every one of the 47 shapes it
             // produces, and the settings as checkboxes. Opening Notepad on it
             // instead would be the least useful of the available answers.
-            TilePaintState& tiles = TilePaintState::Get();
-            tiles.tilePath        = tile.path;
-            tiles.revealRequested = true;
+            //
+            // SELECTING IT IS THE WHOLE OF IT. The Inspector draws whatever
+            // asset is selected, so there is no panel to reveal and no flag
+            // to raise - which is what the old revealRequested was.
+            EditorState::Get().selectedAsset = tile.path;
+        } else if (kind == AssetKind::InputActions) {
+            // A .oinput is JSON and the system editor WOULD open it, which
+            // is a perfectly good way to edit one. The Input Actions window
+            // is a better one: it knows what a composite is, it can list
+            // the maps, and it names the method each action will call.
+            EditorState::Get().requestedInputActions = tile.path;
         } else if (kind == AssetKind::Prefab) {
             // ==============================================================
             //  DOUBLE-CLICK PLACES ONE, which is NOT what Unity does - Unity
@@ -1204,7 +1277,11 @@ void AssetBrowserPanel::DrawPartTile(const Tile& part) {
         ImGui::EndTooltip();
     }
 
-    if (iconHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // ON THE RELEASE, for the reason the tile above gives at length: a frame
+    // is dragged onto animation slots more often than anything else in the
+    // project, and picking it on the press moved the Inspector out from under
+    // the drop.
+    if (iconHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         Pick(part.path, false, true);
     }
 
@@ -1592,8 +1669,11 @@ void AssetBrowserPanel::DrawRenamePopup() {
                             "them could ever run";
         }
         if (!scriptRefusal.empty()) {
-            ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f), "%s",
-                               scriptRefusal.c_str());
+            // Wrapped for the reason the New Script dialog's is; this one
+            // carries the same sentences.
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
+            ImGui::TextWrapped("%s", scriptRefusal.c_str());
+            ImGui::PopStyleColor();
         }
     }
 
@@ -1614,8 +1694,49 @@ void AssetBrowserPanel::DrawRenamePopup() {
             // A FOLDER NEEDS NO FLAG HERE, which is why m_renamePath carries
             // no isDirectory the way m_deletePath does: FollowAsset looks for
             // "<old>.oimport", a folder has none, and it does nothing.
-            eng::ImportLibrary::FollowAsset(
-                m_renamePath, JoinPath(ParentOf(m_renamePath), m_renameBuffer));
+            const std::string newPath =
+                JoinPath(ParentOf(m_renamePath), m_renameBuffer);
+            eng::ImportLibrary::FollowAsset(m_renamePath, newPath);
+
+            // THE PARSED COPIES GO, for the reason RequestDelete gives about
+            // prefabs and AssetRefs.h gives about tiles: nothing watches the
+            // disk, so a file that has moved goes on being handed out from
+            // memory under its old path for the rest of the session.
+            ForgetCachedAsset(m_renamePath);
+
+            // ==============================================================
+            //  AND EVERYTHING THAT POINTED AT IT NOW POINTS AT THE NEW NAME.
+            //
+            //  Without this a rename is a quiet way to break a level: a
+            //  tilemap whose palette entry will not load keeps its cells,
+            //  because cells are numbers, and simply draws nothing where that
+            //  tile was. See AssetRefs.h.
+            // ==============================================================
+            const bool wasDirty = EditorState::Get().IsDirty();
+            const RefRewrite refs = RewriteAssetReferences(m_renamePath, newPath);
+
+            if (refs.openScene) {
+                // The scene was rebuilt from text, so anything naming an
+                // entity by id is describing a scene that no longer exists -
+                // the same reason EditorApp::LoadScene clears it.
+                EditorState::Get().ClearSelection();
+
+                // THE FLAG IS PUT BACK rather than left wherever the reload
+                // dropped it. The file on disk was rewritten too, so the two
+                // still agree exactly as much as they did a moment ago: an
+                // unsaved scene is still unsaved, and a saved one has not
+                // become dirty by having a reference corrected in both places
+                // at once.
+                if (wasDirty) {
+                    EditorState::Get().MarkDirty();
+                } else {
+                    EditorState::Get().ClearDirty();
+                }
+            }
+
+            m_statusIsError = false;
+            std::snprintf(m_status, sizeof(m_status), "renamed to %s - %s",
+                          m_renameBuffer, DescribeRewrite(refs).c_str());
 
             m_picked.clear();
             EditorState::Get().selectedAsset.clear();
@@ -2129,7 +2250,16 @@ void AssetBrowserPanel::DrawNewScriptPopup() {
     const std::string* taken = ScriptNameTaken(m_newScriptName, std::string());
 
     if (!nameOk) {
-        ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f), "%s", error.c_str());
+        // WRAPPED, AND NOT TextColored, because these refusals are sentences
+        // rather than labels. This dialog is AlwaysAutoResize, so one
+        // unwrapped line sets the window's whole width - and the one about a
+        // name that shadows an engine type is a paragraph, which stretched
+        // this popup off the side of the screen with the end of it still cut
+        // off. TextWrapped is what the template explanation below already
+        // uses, so this now matches it.
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
+        ImGui::TextWrapped("%s", error.c_str());
+        ImGui::PopStyleColor();
     } else if (taken != nullptr) {
         ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1.0f),
                            "'%s' is already the script in '%s'", m_newScriptName,
@@ -2219,12 +2349,11 @@ bool AssetBrowserPanel::CreateTile(const std::string& name, const std::string& a
 
     ENGINE_LOG_INFO(eng::Channels::kEditor, "created the tile '{}'", path);
 
-    // Chosen as the brush straight away, and the Tile Palette asked to show
-    // it. A new tile you then have to go and find is a new tile you have to
-    // go and find.
-    TilePaintState& tiles = TilePaintState::Get();
-    tiles.tilePath        = path;
-    tiles.revealRequested = true;
+    // SELECTED STRAIGHT AWAY, so the Inspector is already showing it. A new
+    // tile you then have to go and find is a new tile you have to go and
+    // find. It is not made the brush: a tile belongs to no map until somebody
+    // adds it to one, which is what "Add tile" in the Inspector is for.
+    EditorState::Get().selectedAsset = path;
     return true;
 }
 
@@ -2362,7 +2491,7 @@ void AssetBrowserPanel::DrawNewTilePopup() {
                 if (probe.FrameCount() > 1) {
                     ImGui::TextDisabled("%d frames sideways - set Frames in",
                                         probe.FrameCount());
-                    ImGui::TextDisabled("the Tile Palette to use them");
+                    ImGui::TextDisabled("the Inspector to use them");
                 }
                 ImGui::EndGroup();
             }
@@ -2727,8 +2856,30 @@ void AssetBrowserPanel::ApplyPendingMove() {
     // concatenation, for the empty-root reason spelled out in the rename
     // above. A folder dropped on a folder brings its own sidecars and finds
     // nothing here.
-    eng::ImportLibrary::FollowAsset(
-        request.from, JoinPath(request.toDirectory, LeafOf(request.from)));
+    const std::string movedTo = JoinPath(request.toDirectory, LeafOf(request.from));
+    eng::ImportLibrary::FollowAsset(request.from, movedTo);
+    ForgetCachedAsset(request.from);
+
+    // AND EVERY REFERENCE COMES WITH IT, exactly as on a rename - a move is a
+    // rename that changes the folder rather than the leaf, and a path that
+    // has stopped resolving does not care which of the two happened to it.
+    // A FOLDER dragged onto another folder is covered too: the match counts
+    // the old path followed by "/" as being inside it. See AssetRefs.h.
+    const bool       wasDirty = EditorState::Get().IsDirty();
+    const RefRewrite refs     = RewriteAssetReferences(request.from, movedTo);
+
+    if (refs.openScene) {
+        EditorState::Get().ClearSelection();
+        if (wasDirty) {
+            EditorState::Get().MarkDirty();
+        } else {
+            EditorState::Get().ClearDirty();
+        }
+    }
+
+    std::snprintf(m_status, sizeof(m_status), "moved %s to %s - %s",
+                  request.from.c_str(), DisplayPath(request.toDirectory).c_str(),
+                  DescribeRewrite(refs).c_str());
 
     // What was selected is at a different path now. The selection is dropped
     // rather than left naming somewhere nothing lives, because the Delete key

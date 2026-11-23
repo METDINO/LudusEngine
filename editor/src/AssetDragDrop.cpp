@@ -159,6 +159,13 @@ AssetKind ClassifyAsset(std::string_view virtualPath) {
     if (EndsWithNoCase(virtualPath, eng::kPrefabExtension)) {
         return AssetKind::Prefab;
     }
+    // An action map file, and the fourth of these for the fourth time the
+    // same reason. Named from the engine's own constant rather than a
+    // literal, which is what InputActionAsset.h asks for: the extension is
+    // declared once, beside the type that owns it.
+    if (EndsWithNoCase(virtualPath, eng::kInputActionsExtension)) {
+        return AssetKind::InputActions;
+    }
     return AssetKind::Unknown;
 }
 
@@ -170,6 +177,7 @@ const char* PayloadIdFor(AssetKind kind) {
         case AssetKind::Font:    return kPayloadFont;
         case AssetKind::Tile:    return kPayloadTile;
         case AssetKind::Prefab:  return kPayloadPrefab;
+        case AssetKind::InputActions: return kPayloadInput;
         case AssetKind::Unknown: break;
     }
     // Not nullptr. See the header: an unrecognised file is still a file that
@@ -241,6 +249,11 @@ bool ApplyAssetToEntity(eng::EntityId target, std::string_view virtualPath,
     switch (ClassifyAsset(virtualPath)) {
         case AssetKind::Texture: {
             auto* sprite = entity->Find<eng::SpriteComponent>();
+
+            // Whether the sprite is NEW decides whether its size is ours to
+            // choose. Dropping a different picture onto an entity somebody
+            // already sized is not an invitation to resize it back.
+            const bool freshSprite = sprite == nullptr;
             if (sprite == nullptr) {
                 // Adds the component rather than refusing. Dropping an image
                 // onto an entity that has no sprite obviously means "give it
@@ -254,6 +267,11 @@ bool ApplyAssetToEntity(eng::EntityId target, std::string_view virtualPath,
                 return false;
             }
             sprite->SetTexture(virtualPath);
+            if (freshSprite) {
+                // AFTER SetTexture, which is what gives it proportions to
+                // keep. See SpriteComponent::FitToWorldUnit.
+                sprite->FitToWorldUnit();
+            }
             GiveAnimationIfItIsOne(*entity, virtualPath);
             EditorState::Get().MarkDirty();
             outMessage = entity->Name() + " now uses " + std::string(virtualPath);
@@ -350,6 +368,36 @@ bool ApplyAssetToEntity(eng::EntityId target, std::string_view virtualPath,
             return true;
         }
 
+        case AssetKind::InputActions: {
+            // Same reading as an image on an entity with no sprite: dropping
+            // an action map onto something obviously means "let this drive
+            // from these controls", and making the user press
+            // "+ PlayerInputComponent" first would be pedantry.
+            auto* input = entity->Find<eng::PlayerInputComponent>();
+            if (input == nullptr) {
+                input = static_cast<eng::PlayerInputComponent*>(
+                    entity->AddComponent(eng::PlayerInputComponent::kTypeName));
+            }
+            if (input == nullptr) {
+                outMessage = "could not add a PlayerInputComponent";
+                return false;
+            }
+
+            std::string error;
+            if (!input->SetActions(virtualPath, error)) {
+                // The path IS set either way - the component keeps it so the
+                // Inspector shows what was dropped and the file can be fixed
+                // in place. Only the loading failed, and that is what is said.
+                outMessage = error;
+                EditorState::Get().MarkDirty();
+                return false;
+            }
+            EditorState::Get().MarkDirty();
+            outMessage = entity->Name() + " now plays with " + std::string(virtualPath) +
+                         " (" + input->CurrentActionMapName() + ")";
+            return true;
+        }
+
         case AssetKind::Scene:
             outMessage = "a scene cannot be attached to an entity - drop it on the "
                          "Scene view to open it";
@@ -377,7 +425,8 @@ bool AcceptAssetDropOnEntity(eng::EntityId target) {
     // Every kind that can land on an entity is offered here, so a caller does
     // not have to know which ones those are - and adding a new kind is one
     // edit. See ApplyAssetToEntity for what each one does.
-    for (const char* payloadId : {kPayloadTexture, kPayloadScript, kPayloadPrefab}) {
+    for (const char* payloadId :
+         {kPayloadTexture, kPayloadScript, kPayloadPrefab, kPayloadInput}) {
         const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(payloadId);
         if (payload == nullptr) {
             continue;
@@ -485,6 +534,12 @@ eng::EntityId CreateEntityForAsset(std::string_view virtualPath, eng::Vec2 world
         return id;
     }
     sprite->SetTexture(virtualPath);
+
+    // ONE WORLD UNIT, whatever the PNG happens to be. See
+    // SpriteComponent::FitToWorldUnit - and note it keeps the proportions, so
+    // dropping a tall character in does not square it off.
+    sprite->FitToWorldUnit();
+
     GiveAnimationIfItIsOne(*entity, virtualPath);
 
     EditorState::Get().MarkDirty();

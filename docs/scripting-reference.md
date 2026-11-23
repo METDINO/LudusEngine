@@ -44,6 +44,17 @@ reads both:
 |---|---|
 | `CppProperties.json` | Visual Studio, and only in its Open Folder mode |
 | `compile_commands.json` | clangd, and so VS Code, CLion, Qt Creator, Neovim, Emacs |
+| `.vscode/launch.json` | VS Code's debugger — press F5 to attach to the editor |
+
+The third is only written if it is not already there, because it is a file
+people add their own entries to.
+
+**You can put a breakpoint on a line of your own script.** Scripts are
+compiled with debug information and each library is linked with a `.pdb`
+beside it, so attaching a debugger to the editor and stopping inside
+`OnUpdate` works, with locals and a call stack. Nothing needs switching on.
+See *Stepping through a script in a debugger* in the editor guide for how to
+attach and for the two things worth knowing first.
 
 Then **File -> Open Project in Visual Studio**, which opens the *folder*. That
 is the part that matters: Visual Studio only reads `CppProperties.json` for a
@@ -54,12 +65,47 @@ instance and work.
 
 Without opening a window at all: `editor --write-ide-files`.
 
-Two things worth knowing:
+### And a third file, which is what stops another script's name going red
+
+Both of those point at `.build/script-scope.h`, which the editor also writes.
+It is the answer to the other half of the problem: your IDE opens one script at
+a time, and on its own a script has never heard of the others — so
+
+```cpp
+Bullet b;              // in Gun.cpp
+```
+
+would be underlined as an unknown type, and `b->damage` would offer no
+completion, even though the editor compiles both without complaint. The real
+compile puts every script in the project in scope (see
+[How the name gets there](#how-the-name-gets-there)); this header does the same
+thing for a tool that only ever sees one file.
+
+It is **written again on every build**, because its contents are the scripts'
+own text and go stale the moment one is edited. So:
+
+| | |
+|---|---|
+| **A new script is unknown to your IDE until it compiles once** | Save it, switch to the editor, let the rebuild happen. Visual Studio caches hard: if a name stays red after that, close the folder and reopen it. |
+| **Set up IntelliSense again after upgrading the engine** | A `CppProperties.json` written before this existed does not mention the scope header at all, and the symptom is exactly the one it fixes — a correct reference underlined. Each file says at the top when it was written. |
+
+**It is not a description of the real compile, and says so in its own text.**
+Two differences, both in the safe direction of never inventing an error:
+
+- Every script is complete there by the time your file is read, so **two
+  scripts that each call the other** show no error while you type. The build
+  still refuses that and names the loop.
+- Your file sits at global scope there rather than inside its own namespace, so
+  **another script's file-scope helper functions** are not offered to you even
+  though they compile.
+
+Two more things worth knowing:
 
 - **Neither file is worth committing.** The include paths in them are absolute,
   and a released editor and a source tree do not even use the same set of them,
   so a copy from somebody else is wrong rather than merely out of date.
-  Regenerating is one menu item.
+  Regenerating is one menu item. The scope header is generated too, and lives
+  under `.build/`, which is already ignored.
 - **Your scripts are compiled as C++20**, one standard behind the engine itself.
   These files say so, which means your IDE will refuse a C++23 feature here
   before the compiler gets the chance to.
@@ -112,7 +158,7 @@ The vocabulary is different in two places and the same everywhere else:
 
 | Unity | Here | Why |
 |---|---|---|
-| `GameObject` | `eng::Entity` | A name, an id and a bag of components - the same model, the older name for it. |
+| `GameObject` | `eng::GameObjectRef` | Unity's serialized `GameObject` field: a slot that takes a scene object **or** a prefab. Converts to `eng::Entity*`, so `GameObject self = Owner();` still works. The thing itself is an `eng::Entity`. |
 | `Transform` | `eng::Transform2D` | Two dimensions, so one rotation angle rather than a quaternion. |
 | `MonoBehaviour` | `eng::ScriptBehaviour` | You inherit it and write only the hooks you want. |
 | `GetComponent<T>()` | `Find<T>()` | House rule: a lookup that can come back empty is `Find`, never `Get`. |
@@ -699,6 +745,195 @@ costs. It is worth paying for an edge; for an axis it is a frame of latency for
 nothing, so leave those where they are unless you want every input read in one
 place.
 
+### Being told instead of asking: action maps
+
+Everything above is the **polling** half, and it is unchanged. There is a
+second, separate half where the engine calls a method on your script when an
+action happens — Unity ships both for the same reason, and so does this:
+polling reads better when input drives one character every frame, events read
+better when the input is occasional or has to reach several places.
+
+Write the method and nothing else. No registration, no subscription:
+
+```cpp
+class PlayerShip final : public eng::ScriptBehaviour {
+public:
+    void OnJump() { m_jumpQueued = true; }            // the action "Jump"
+    void OnMove(eng::Vec2 direction) { m_move = direction; }
+    void OnLean(float amount) { m_lean = amount; }
+};
+```
+
+The method is `On` plus the action's name. It may take the value, a single
+number, or nothing at all — whichever you declare is the one that gets called.
+**It must be public**, because the engine calls it from outside the class.
+
+**The parameter IS how you get the value**, and there is no event object to ask
+afterwards. The three shapes are tried most-specific-first and are mutually
+exclusive, so a handler wanting a `float` can never be handed a vector:
+
+| Declare | And you get |
+|---|---|
+| `void OnMove(eng::Vec2 direction)` | the whole value, for a `Vector2` action |
+| `void OnLean(float amount)` | one number, for an `Axis` action |
+| `void OnJump()` | nothing but the fact that it happened |
+
+**There is no fourth shape taking an `eng::ActionEvent`.** That struct is the
+`Subscribe` view, where one callback sees every action and every phase and has
+to tell them apart itself; a handler is handed `vector` or `value` already
+unpacked. A method whose parameters are none of the three is reported as
+unreachable rather than failing the build, so a wrong parameter costs you that
+one handler quietly — as does a non-`void` return, because the scanner that
+finds handlers anchors on the literal word `void`.
+
+That is about the `On` spelling. A method subscribed **by name** may take an
+`eng::ActionEvent` — see below.
+
+If you would rather take no parameter, the component will tell you the same
+thing at any moment:
+
+```cpp
+eng::PlayerInputComponent* input = Find<eng::PlayerInputComponent>();
+if (input != nullptr) {
+    const eng::Vec2 move = input->Vector("Move");   // Value / Vector2
+    const float     lean = input->Value("Lean");    // Value / Axis
+    const bool      held = input->IsDown("Jump");   // Button
+}
+```
+
+
+The actions themselves live in a **`.oinput` file** under `assets/input/`, one
+file holding several **action maps**, with one map current at a time. Put a
+**Player Input** component on the entity, point it at the file, and name the
+map it starts on. Edit the file in the **Input Actions** window — double-click
+it in the Assets panel, or **View → Input Actions**, where **+ New** writes one
+bound to the same controls `config/engine.json` already uses. Every type named
+here has a page in the [API reference](api/index.html) under **Input**.
+
+This is a different system from the `config/engine.json` contexts above. A
+project can use either, or both, and they never have to agree.
+
+**When each one fires** is Unity's rule exactly, and it is worth knowing:
+
+| Action type | Called |
+|---|---|
+| `Button` | once, on the **press**. There is no call on the release — poll `IsReleased` for that. |
+| `Value` | on every change, **and once more with zero** when it stops. |
+| `Pass Through` | on every change, with no phases at all. |
+
+That final zero is the point of a `Value` action: a script that started moving
+when `OnMove` handed it a direction is told when the direction becomes nothing,
+so it cannot walk into a wall forever.
+
+**Who hears it** is the *Behaviour* field on the Player Input component, and
+the three choices are exclusive - one is in force and the others are not also
+running:
+
+| Behaviour | Who hears an action |
+|---|---|
+| `SendMessages` | scripts on **that entity**. The default. |
+| `BroadcastMessages` | that entity **and everything under it** - use this when the script handling `OnFire` lives on a child. |
+| `Callbacks` | **no automatic calls at all**; only what `Subscribe` asked for, which keeps running. |
+
+Set it in the Inspector, on the Player Input component. It is Unity's
+*Behavior* dropdown less *Invoke Unity Events*, which picks a method per action
+from a dropdown and needs run-time reflection this engine has nowhere to get.
+
+**A handler may destroy things, including itself.** `OnJump` can remove a
+component, remove the Player Input that is dispatching it, or destroy its own
+entity, and the engine finishes the round of calls without reading anything it
+has just freed — the object being removed is still whole while its `OnDestroy`
+runs, and the ones behind it are re-read rather than remembered. The one thing
+that is not promised is that a component destroyed mid-round still hears *this*
+action: it may be skipped, which is the same answer `LoadScene` above gets, and
+for the same reason. Removing a *later* component on the same entity can also
+cost the one directly behind it that single call — a position-based walk cannot
+tell a shift from a step — so if two scripts must both hear an action, do not
+have one of them remove the other.
+
+### Naming the action instead of naming the method
+
+`OnFire()` works because the method's **name** is the wiring. When that is not
+possible — the method already has a name worth keeping, or one method is to
+answer to several actions — name the action instead:
+
+```cpp
+class Gun final : public eng::ScriptBehaviour {
+public:
+    PlayerInput input;                        // drag the Player entity onto this
+
+    void OnStart() {
+        input->Subscribe("Fire", this, &Gun::FireGun);
+        input->Subscribe("Move", this, &Gun::Aim);
+    }
+
+    void FireGun() { /* once per press */ }
+    void Aim(eng::Vec2 direction) { m_aim = direction; }
+
+private:
+    eng::Vec2 m_aim{};
+};
+```
+
+**The parameter is chosen the same way**, by the same ladder, in the same
+order — take `eng::Vec2`, `float`, nothing, or `const eng::ActionEvent&` if you
+want the phase as well. A method matching none of those is a **compile error**
+here, with a message saying so, which is the one thing the `On` spelling cannot
+offer: a handler with the wrong parameter is simply never called.
+
+**It fires when a handler would fire.** One press of a `Button` is one call, and
+a `Value` action still gets its final zero. The phase filtering that a raw
+`Subscribe(lambda)` has to do for itself is already applied.
+
+**There is nothing to store and nothing to clean up.** No token, no vector of
+tokens, no `OnDestroy`. The subscription is remembered against the *object*, so
+`input->Unsubscribe(this)` takes back everything it asked for in one call — and
+a script does not have to make even that call, because the behaviour's
+destructor withdraws the address. That matters more than it sounds: changing a
+Script Component's script destroys the behaviour and builds a new one **while
+the Player Input component beside it lives on**, so a remembered `this` would
+otherwise be called again on the next press.
+
+**And it runs whatever the Behaviour field says**, because a subscription is not
+a message. Setting `Callbacks` silences the automatic `OnFire()` calls on every
+script on the entity and leaves these running — which is what makes that mode
+usable from one script without disarming itself.
+
+The collective form is still there for the cases this one is not meant for:
+
+```cpp
+// Every action, every phase, one callback - and a token you have to keep.
+eng::PlayerInputComponent::Token token =
+    input->Subscribe([](const eng::ActionEvent& event) {
+        if (eng::ActionSendsMessage(event)) { /* ... */ }
+    });
+```
+
+Use it to log everything, or to see a phase that `ActionSendsMessage` filters
+out. For "call my method when Fire happens", the three-argument one is the
+shorter and the safer of the two.
+
+
+From another script, hold a reference and change what the controls mean:
+
+```cpp
+class PauseMenu final : public eng::ScriptBehaviour {
+public:
+    PlayerInput player;          // drag the Player entity onto this
+
+    void Open()  { player->SwitchCurrentActionMap("Menu"); }
+    void Close() { player->SwitchCurrentActionMap("Gameplay"); }
+};
+```
+
+A map **replaces** rather than layering — unlike a context — so while `Menu` is
+current nothing in `Gameplay` is consulted at all. That is what lets `Escape`
+mean *Pause* in one map and *Cancel* in the other with nothing to arbitrate
+between them. Switching with a key still held does the two sensible things: a
+`Value` action adopts it (hold a direction while a level loads and you walk
+forward), a `Button` waits for a fresh press (so the key that opened the menu
+does not immediately close it).
+
 The mouse, which cannot be rebound and so is not an action:
 
 ```cpp
@@ -769,6 +1004,11 @@ if (auto* label = scoreLabel.Find<eng::UITextComponent>()) {
 }
 ```
 
+`Find<T>` through a reference takes the same spellings as `Find<T>` on the
+script itself, so the bare `scoreLabel.Find<UITextComponent>()` means exactly
+what the qualified line above does. A bare component name *is* a reference
+type inside a script, and every lookup unwraps it before asking.
+
 **A message.** No headers at all, and the payload is deliberately small - two
 floats, an int and another entity covers how much damage, what was hit, which
 trigger:
@@ -788,10 +1028,18 @@ destroy queue.
 **The script object itself**, when you need to call its own methods:
 
 ```cpp
-FindScriptOn<Chaser>(entity)        // a script on a particular entity
-FindScriptIn<Chaser>(*GetScene())   // the one in the scene
-FindScriptNamedIn(*GetScene(), "ScoreKeeper")   // by name, no headers needed
+FindScriptOn<Chaser::ScriptType>(entity)       // a script on a particular entity
+FindScriptIn<Chaser::ScriptType>(*GetScene())  // the one in the scene
+FindScriptNamedIn(*GetScene(), "ScoreKeeper")  // by name, no headers needed
 ```
+
+**The `::ScriptType` is not optional.** A bare `Chaser` is a *reference* to the
+script — that is exactly what makes `Chaser chaser;` a slot you drag an entity
+onto — so `FindScriptOn<Chaser>` asks for something no entity carries. It used
+to compile, exit 0 and return null for ever; it is now refused by a
+`static_assert` that names the fix. Holding `Chaser chaser;` and calling
+`chaser->Method()` is usually better still: no lookup, and the Inspector can
+re-point it.
 
 The typed forms need the class to be **nameable** from your file. Scripts share
 the global namespace - they used to each sit in an anonymous `namespace { }`,
@@ -870,9 +1118,15 @@ One comment line, immediately above, starting with the bracket: a blank line or
 a banner line in between breaks it. A marker on the declaration's own line wins.
 
 Supported: `float`, `int`, `bool`, `std::string`, `eng::Vec2`, `eng::Color`,
-`eng::EntityRef`, `eng::PrefabRef`, `eng::AnimationRef`, `eng::ImageRef` —
-**or a fixed-size array of any of them**. Anything else is left out, and the
-Console says which and why.
+`eng::EntityRef`, `eng::PrefabRef`, `GameObject`, `eng::AnimationRef`,
+`eng::ImageRef`, and
+the two typed references — `eng::ComponentRef<T>` for a component the engine
+defines and `eng::ScriptRef<T>` for another script — **or a fixed-size array of
+any of them**. Anything else is left out, and the Console says which and why.
+
+A `[TypeName]` marker narrows a plain `eng::EntityRef`; the two typed
+references take that constraint from the type instead, so it cannot drift away
+from what the script actually calls.
 
 ### An animation is a type, not a marked string
 
@@ -935,6 +1189,56 @@ a string, an `ImageRef`, an `AnimationRef`, an `[image]`/`[animation]` slot or a
 string accepts **any** kind of asset, because nothing can know which kind it
 wanted.
 
+A `GameObject` slot is the only one that takes **both**: a prefab from the
+Assets panel or an object from the Hierarchy, whichever you drag onto it.
+
+### A GameObject is either kind of thing
+
+```cpp
+GameObject thing = nullptr;   // or: eng::GameObjectRef thing;
+```
+
+One slot, and what you drop on it decides what it is. `Instantiate(thing)`
+then does the right thing with whichever half it holds — **a prefab is built
+from its file, and a scene object is CLONED**, which is Unity's behaviour for
+`Instantiate(someSceneObject)` and what makes the two interchangeable at the
+call site.
+
+That is the whole point of the type. "What to spawn when the player presses
+fire" used to commit in C++ to being a prefab or an object already in the
+level, because `eng::PrefabRef` and `eng::EntityRef` are different types —
+so changing your mind meant editing the script rather than dragging something
+else on. The decision belongs in the Inspector.
+
+**`GameObject` used to be `typedef eng::Entity*`**, and a pointer is the one
+thing the Inspector cannot draw: an address has nothing to put in a box, so
+the exposer skipped it and said so. `GameObject target;` was a variable you
+could declare and never see. It is a value now, and old code is unaffected —
+it converts to `eng::Entity*` implicitly and has `operator->`, so
+`GameObject self = Owner();`, `self->Transform()` and `if (self != nullptr)`
+all mean what they meant.
+
+**A prefab one resolves to nothing.** `Target()` is null until you
+instantiate it, because a prefab is not in the scene — there is no transform
+to read and no position to ask for. `IsPrefab()` is there so a script that
+cares can ask. Pretending otherwise would mean silently building a copy every
+time somebody read a position.
+
+In a scene file it is written as `{ "entity": "Door" }` or
+`{ "prefab": "prefabs/bullet.oprefab" }`. The kind is written down rather than
+inferred: a rule like "does it end in .oprefab" would work until somebody
+named an entity after a file, and the failure would be a spawner that silently
+spawns nothing. A bare string is accepted on read as an entity name, which is
+what somebody hand-editing a scene will type.
+
+`assets/scripts/Spawner2.cpp` is the worked example.
+
+A **constrained** reference — a `ComponentRef<T>`, a `ScriptRef<T>`, a bare
+script name, or an `EntityRef` with a `[TypeName]` marker — only takes an
+entity that satisfies it. The target does not light up for one that does not,
+and the row says what is missing from it while you hover. An unconstrained
+`eng::EntityRef` still takes anything, which is what no constraint means.
+
 ### A picture is a type too
 
 ```cpp
@@ -994,6 +1298,140 @@ Nothing in this project ever used the marker, which is the problem it had — a
 mechanism with no example anywhere, findable only by reading the engine's own
 headers.
 
+### Coroutines
+
+Unity's `StartCoroutine`, with C++20's `co_yield` in place of `yield return`:
+
+```cpp
+Coroutine Blink() {
+    while (true) {
+        flash->SetTint(Color::Red());
+        co_yield WaitForSeconds(0.5f);           // yield return new WaitForSeconds(.5f)
+        flash->SetTint(Color::White());
+        co_yield WaitForSecondsRealtime(0.5f);   // ignores timeScale
+        co_yield nullptr;                        // yield return null  -> next frame
+        co_yield 0;                              // yield return 0     -> next frame
+        co_yield WaitForEndOfFrame();            // after every OnUpdate, after every draw
+    }
+}
+
+void OnStart() { StartCoroutine(Blink()); }
+```
+
+| | |
+|---|---|
+| `co_yield WaitForSeconds(s)` | **Game** time. Stops dead at `timeScale` 0, which is what makes it right for anything the player can see. |
+| `co_yield WaitForSecondsRealtime(s)` | **Real** time. Ignores `timeScale` - the same split `Time::DeltaTime` and `Time::UnscaledDeltaTime` make. |
+| `co_yield nullptr` or `co_yield 0` | Next frame. Both spellings work, because both are Unity's. |
+| `co_yield WaitForEndOfFrame()` | **No time at all.** Still *this* frame, after every script's `OnUpdate` and after every next-frame resume. An ordering barrier, not a drawing opportunity - see below. |
+
+**There is no thread, and there must not be one.** A coroutine is resumed on the
+main thread, from the same place `OnUpdate` runs - which is what Unity does too:
+`yield return` suspends a state machine and the player loop resumes it between
+updates. There are two resume points in a drawn frame and any one coroutine uses
+exactly one of them - the ordinary pass where `OnUpdate` runs, and the
+end-of-frame pass that only `WaitForEndOfFrame` uses - so a coroutine is resumed
+once per frame either way. So a coroutine may do exactly what `OnUpdate`
+may do, no more and no less, and that equivalence is the whole value of it. A
+coroutine on another thread could not touch a transform or a component safely;
+this engine has `DeferredOps` because that is not even safe from the *main*
+thread partway through a frame.
+
+**The body starts inside `StartCoroutine`**, running up to its first
+`co_yield`, exactly as in Unity. A `Coroutine` nobody starts runs nothing at all
+and frees itself, so a forgotten `StartCoroutine` is a no-op rather than a leak -
+and the compiler mentions the unused result.
+
+**It dies with the script that started it**: when the entity is destroyed, the
+component removed, the scene replaced, play stopped, on every undo step, and on
+every script rebuild. That is not politeness. A coroutine written as a member
+function holds `this` inside its frame, so one outliving its script would be a
+dangling `this` rather than a leak.
+
+```cpp
+CoroutineId id = StartCoroutine(Blink());
+StopCoroutine(id);        // true if it was running
+StopAllCoroutines();      // and this one needs no id
+RunningCoroutineCount();  // how many are live right now
+```
+
+The id is ignorable - `StartCoroutine(Blink());` is the ordinary spelling.
+Stopping one that already finished is simply `false`, never a wrong hit: ids are
+never reused.
+
+**Two differences from Unity, both deliberate:**
+
+- **Nothing ticks while the game is paused**, including `WaitForSecondsRealtime`.
+  The resume runs from the frame update, which the engine does not call at all
+  while the clock is paused with no simulation steps. A paused game is frozen,
+  and a coroutine is part of the game.
+- **Switching the entity off pauses its coroutines; it does not lose them.**
+  Unity destroys a GameObject's coroutines when it is deactivated. Here every
+  other thing on a disabled entity resumes where it left off, so a coroutine
+  that silently evaporated would be the one exception. Switch it back on and it
+  carries on.
+
+**Do not destroy your own entity from inside a coroutine with
+`Scene::DestroyEntityImmediate`** - the frame being resumed would be freed
+underneath the resume. Use `DestroySelf()`, which defers to stage 600, after the
+resume pass. That is the rule `Scene.h` already states for every other piece of
+game code, for the same reason.
+
+**What `co_yield` will not take** is anything else, and that is on purpose.
+Unity treats an unrecognised object as "next frame", so `yield return 0.5f`
+silently waits one frame instead of half a second; here it does not compile, and
+the error says what to write. There is no `WaitUntil` or `WaitWhile` yet, no
+`yield return` of another coroutine yet, and no `StartCoroutine("Blink")` -
+that needs reflection this engine does not have.
+
+**`co_yield WaitForEndOfFrame()` is an ordering primitive, not a rendering
+one.** It resumes in the same frame, from `Engine::PresentFrame()` - the one
+call every host makes, so it is the same instant in the editor and in the
+standalone player - strictly after every script's `OnUpdate` and after every
+`co_yield nullptr` resume of that frame.
+
+That barrier is the whole of what it buys, and `co_yield nullptr` cannot give it
+to you: that one resumes a coroutine inside its *own* component's frame tick, so
+it lands before a later component's `OnUpdate`. Reach for `WaitForEndOfFrame`
+when a coroutine reads something any script might still have been changing this
+frame - a score several objects add to, a flag another script raises in its
+`OnUpdate` - where the answer would otherwise depend on the order things were
+attached in.
+
+**What it does not buy is anything to do with the picture.** Drawing is over by
+then in both hosts, and `Gizmos::EndFrame` has already aged the gizmo queue, so
+a gizmo issued there appears a frame *late*. A direct `Renderer::` call is worse
+than late: it lands on top of everything already drawn, which in the editor
+means on top of the editor's own panels, because the Game view drew into its own
+texture while the window now holds the interface. Draw from `OnUpdate`. Unity's
+reason for this wait is `ScreenCapture`/`ReadPixels` on the finished back buffer,
+and this engine exposes no framebuffer readback at all - so that use does not
+exist here, and the resume is before the swap rather than after it, which makes
+it no kind of "the frame has been shown" signal either.
+
+**It promises a phase, not a priority.** "After every `OnUpdate`" is exact and
+the same in both hosts. Which of two coroutines both waiting here goes first is
+not: that is the order their components were attached in, which is an accident
+of the scene file, is reset wholesale by every script rebuild, and has no API to
+read or set. Use it to be after *everybody*, never to be before one particular
+script.
+
+`Time::DeltaTime()` there is the same number `OnUpdate` saw - the frame is over
+and the clock has not moved on - so a coroutine that resumes in both passes of
+one frame and adds `DeltaTime()` each time has counted that frame twice. The end
+of a frame is not a new slice of time.
+
+There is no `WaitUntil` or `WaitWhile` yet, no `yield return` of another
+coroutine yet, and no `StartCoroutine("Blink")` - that needs reflection this
+engine does not have. Each is a named compile error rather than a silent wrong
+answer.
+
+**The `enum Phase` pattern is not obsolete.** A state machine you can watch in
+the Inspector beats a suspended frame you cannot, so it is still the better
+answer for anything a designer needs to see or a save file needs to store.
+`assets/scripts/GameRules.cpp` remains the worked example for it. Coroutines are
+for sequences in time, not for the game's state.
+
 ### A reference to a component on another entity
 
 Unity's object fields. Declare one, drag an entity from the Hierarchy onto the
@@ -1013,17 +1451,94 @@ public:
 };
 ```
 
-`TransformRef`, `SpriteRenderer` and `Rigidbody2D` are the short spellings.
-For anything else, name the component:
+**A component's own name IS a reference, exactly like a script's.** That is the
+whole rule, and there is only one of it:
 
 ```cpp
-eng::ComponentRef<eng::TilemapComponent> ground;
-eng::ComponentRef<eng::BoxColliderComponent> area;
+SpriteComponent      renderer;   // a slot you drag an entity onto
+Rigidbody2DComponent body;       // the same
+Invisibility         invis;      // a script you wrote - no different
 ```
 
+All three are filled in the same two ways — by dragging an entity onto the slot
+in the Inspector, or in code from the lookup:
+
+```cpp
+renderer = Find<SpriteComponent>();
+body     = Find<Rigidbody2DComponent>();
+invis    = Find<Invisibility>();
+```
+
+The same line works as a **declaration** too, which is what you reach for when
+the reference is a local rather than a slot:
+
+```cpp
+SpriteComponent renderer = entity->Find<SpriteComponent>();
+```
+
+**For a local, though, a plain pointer is usually the better answer.** A
+reference stores the target entity's NAME and looks it up again on every use -
+which is exactly what makes it survive a save, a scene reload and a script
+rebuild, none of which a local lives long enough to see. It is paying for a
+property it cannot use, and the extra lookup, every time you touch it:
+
+```cpp
+auto* renderer = entity->Find<SpriteComponent>();   // a local: the component
+SpriteComponent renderer;                           // a member: the slot
+```
+
+and all three are reached with `->`. There is nothing an engine component does
+here that a component you write does not, which is the point of it.
+
+**The QUALIFIED name is the class.** `eng::SpriteComponent` is the component
+itself, so `eng::SpriteComponent* p` is a raw pointer to one and
+`eng::SpriteComponent x;` holds one by value — still a mistake, and still
+reported as one. The bare name and the qualified name are deliberately
+different things, exactly as `Invisibility` and the class behind it are.
+
+> **Coming from an older project?** `SpriteComponent* p;` — the bare name with
+> a star — now means a pointer to a *reference*, so it stops compiling at the
+> lines that use it. Drop the star, or write `eng::SpriteComponent*` if you
+> really did want a raw pointer. The build names the declaration and tells you
+> which, before the compiler gets a turn.
+
+**The short spellings still work**, and read better where Unity's name is the
+one you already know. All of these name the same type:
+
+| Component | Write | | Component | Write |
+|---|---|---|---|---|
+| `TransformComponent` | `TransformRef` | | `BoxColliderComponent` | `BoxCollider2D` |
+| `SpriteComponent` | `SpriteRenderer` | | `CircleColliderComponent` | `CircleCollider2D` |
+| `SpriteAnimationComponent` | `SpriteAnimator` | | `CapsuleColliderComponent` | `CapsuleCollider2D` |
+| `Rigidbody2DComponent` | `Rigidbody2D` | | `EdgeColliderComponent` | `EdgeCollider2D` |
+| `CameraComponent` | `CameraRef` | | `PolygonColliderComponent` | `PolygonCollider2D` |
+| `TilemapComponent` | `Tilemap` | | `TilemapColliderComponent` | `TilemapCollider2D` |
+| `SpinComponent` | `SpinRef` | | `UIRectComponent` | `UIRectRef` |
+| `UIImageComponent` | `UIImageRef` | | `UITextComponent` | `UITextRef` |
+| `UIButtonComponent` | `UIButtonRef` | | `UISliderComponent` | `UISliderRef` |
+| `PlayerInputComponent` | `PlayerInput` | | | |
+
+`eng::ComponentRef<eng::TheComponent>` is accepted as well, so a tilemap slot
+can be spelled any of three ways and they are one type:
+
+```cpp
+TilemapComponent                         ground;   // its own name
+Tilemap                                  ground;   // the short spelling
+eng::ComponentRef<eng::TilemapComponent> ground;   // written out in full
+```
+
+**Two names are missing on purpose.** `Camera` is spelled **`CameraRef`**,
+because `eng::Camera` is a real class and scripts say `using namespace eng;` —
+a bare `Camera` would be ambiguous in every script. And `Collider2D` is a
+*pointer* to the abstract collider base rather than a reference: `Entity::Find`
+looks a component up by name and an abstract base has none, so name the
+concrete collider you mean, or call `eng::FindCollider(Entity&)`.
+
 **The slot only accepts an entity that has that component.** The picker lists
-only those, and the constraint comes from the type itself - there is no
-`// [SpriteComponent]` marker to write and none to get wrong.
+only those, a drag from the Hierarchy that does not have one is not taken - the
+row says so rather than filling in and going amber - and the constraint comes
+from the type itself, so there is no `// [SpriteComponent]` marker to write and
+none to get wrong.
 
 **`if (anchor)` is the question to ask**, and it is true only when the
 reference resolves *right now*. Empty, deleted, renamed away, or carrying no
@@ -1071,21 +1586,181 @@ private:
 | `Transform anchor;` | Does not compile, with an error that points nowhere near the cause. `ScriptBehaviour` declares `Transform2D* Transform()`, and inside a script class that inherited member function hides a namespace-scope type of the same name. | `TransformRef anchor;` |
 | `Collider2D area;` | Not a reference - it is still a plain pointer. `ColliderComponent` is the abstract base of the four collider types and has no `kTypeName`, and `Find<T>` looks a component up by exactly that name. | `eng::ComponentRef<eng::BoxColliderComponent>`, or `eng::FindCollider(entity)` for any collider |
 
-**A reference to another *script* is not expressible.** A script class lives in
-an anonymous namespace in its own file, so no other script can name the type.
-Use an `eng::EntityRef` with a `// [ScoreKeeper]` marker to get the slot, and
-`FindScriptNamedIn` or a message to do the talking — see **Talking to other
-scripts**.
+### A reference to a script on another entity
 
-### An array is one row per element
+The same slot, pointed at a class the *game* defines instead of one the engine
+does:
+
+```cpp
+class DoorSwitch final : public eng::ScriptBehaviour {
+public:
+    Door door;                   // drag the door this plate opens
+
+    void OnTriggerEnter(eng::EntityId) {
+        if (door) {
+            door->Open();        // Door's own method
+        }
+    }
+};
+```
+
+**No `#include`, and no wrapper type.** The bare script name is the whole
+declaration, the way `public Door door;` is in Unity. The build puts every
+script in the project in scope before a script is compiled, so another
+script's name is simply available.
+
+The Inspector draws it exactly as a component reference: a drop target, a
+picker offering only the entities that carry a `Door`, the name in red when it
+stops resolving, and the saved value following a rename. It stores the target
+entity's **name** and resolves on every access, for the same four reasons a
+component reference does.
+
+`assets/scripts/Script References/` is the worked example — two files, `Door.cpp`
+and `DoorSwitch.cpp`, with no header between them — and
+`assets/scenes/script_references.oscene` is the pair wired up and running:
+
+```
+build/debug/bin/player --scene scenes/script_references.oscene
+```
+
+Two pressure plates, two doors, and each plate opens the one door it was pointed
+at. Nothing in it reads the keyboard, so it demonstrates itself the moment you
+press Play — a weight circles the middle of the scene and crosses each plate in
+turn. Swap the two `door` values in the Inspector and each plate opens the far
+door instead, with nothing recompiled, which is the whole point: the wiring is
+level data rather than code.
+
+#### How the name gets there
+
+C++ needs a complete type to call a method on one, and `DoorSwitch.cpp` has no
+declaration of a class defined in `Door.cpp` — so the build supplies it. Every
+generated translation unit **declares and aliases every script in the project
+before it defines any of them**, then wraps each one in a namespace of its own:
+
+```cpp
+namespace s_Door       { class Door; }
+namespace s_DoorSwitch { class DoorSwitch; }
+
+using Door       = ::eng::ScriptRef<s_Door::Door>;
+using DoorSwitch = ::eng::ScriptRef<s_DoorSwitch::DoorSwitch>;
+
+namespace s_Door {
+using DoorSwitch = ::eng::ScriptRef<s_DoorSwitch::DoorSwitch>;
+#line 1 "assets/scripts/Script References/Door.cpp"
+... Door.cpp, exactly as you wrote it ...
+}
+```
+
+Inside `s_Door` the name `Door` is **the class**, so that file compiles as
+written and its `ENGINE_REGISTER_SCRIPT` still names the class. Anywhere else
+the same name is **a reference**, so every other script sees a slot. The
+namespace is identical in every unit, including Door's own, because resolving a
+reference ends in a `dynamic_cast` and MSVC matches `type_info` by decorated
+name — one library that did not wrap the class would hand out objects no other
+library could cast to.
+
+The forward declarations are what make it general: a `ScriptRef<T>` keeps a
+*name*, so its size and layout are the same whatever `T` is, and the only part
+that needs `T` whole is the resolve — which is compiled where the reference is
+*used*. So **a reference may point in either direction, or both**: the plate
+holds a `Door` and the door holds a `DoorSwitch`, with no header, no include,
+and no order between them.
+
+| | |
+|---|---|
+| **Your `#include` lines are hoisted** out of the namespace, because an include *inside* one would put whatever it names in there too — `#include <cmath>` would make `std::cos` into `s_Door::std::cos`. Each leaves a blank line behind, so `#line` stays true and a compiler error still points at your line. |
+| **One script can call another's file-scope helpers**, backwards along the dependency order — so a script can use a helper from something it points at. A helper several scripts share belongs in a `.cpp` of its own, which the build compiles once and links into every script with no ordering rule at all. |
+
+**A header still works, and is still a reasonable choice.** Put the class in
+`Door.h`, include it from `Door.cpp`, keep `ENGINE_REGISTER_SCRIPT(Door)` in the
+`.cpp`, and the build folds that header into `Door`'s namespace — so the class
+ends up in exactly the same place and `Door door;` works the same from
+elsewhere. The header is now about how you like to organise files rather than
+something the engine makes you do. Two rules still apply to it:
+
+| | |
+|---|---|
+| The registrar goes in **one `.cpp`** | In the header instead, it registers once per file that includes it. That works — the registry recognises the repeat — but which library owns the class then depends on load order. |
+| It still needs a **lifecycle hook** | A class with no `OnStart`, `OnUpdate`, `OnFixedUpdate`, `OnDestroy` or collision hook is refused at compile time — "nothing would ever call it". `OnExpose` does not count. Easy to trip when writing a script that exists purely to be driven by another one. |
+
+**`ScriptRef<Door>` still compiles.** The bare name is already a reference, so
+the explicit spelling asks for a reference to a reference, which
+`scene/ScriptRef.h` collapses. Older scripts and older examples keep working.
+
+#### Three places the bare name is not the spelling
+
+Each is a C++ rule rather than a build limit, each has a spelling that works,
+and the build says which one before the compiler gets a turn.
+
+| | |
+|---|---|
+| **A reference to its own kind** — a door that opens the next door along | Inside `class Door` the name `Door` is the class being defined, always: that is the injected-class-name and no arrangement of namespaces changes it. So `Door door;` there declares a member of itself. Write `ScriptRef<Door> next;`, which means the same thing everywhere. |
+| **Deriving from another script** | `class SlidingDoor : public Door` asks to inherit from a *reference*. Write `public Door::ScriptType` — `ScriptRef` declares that name for exactly this. The base must not be `final`, which every script written from the templates is, so take that off the one you derive from. |
+| **Two scripts that each call the other** | `other->Method()` is ordinary member lookup and needs the other class *finished*, so the caller is compiled after it — and in a loop, each would have to come after the next. Two C++ classes whose inline methods call each other cannot be written in one file either. Let one side do the calling and the other just hold the slot (which is what `Door` and `DoorSwitch` do), send an `eng::Message`, or move the shared part into a `.cpp` of its own. |
+
+Holding a reference is never restricted this way. Declaring one, testing it
+with `if (other)`, saving it, dragging it in the Inspector and following a
+rename all work in any direction — only the arrow needs the far class
+finished. And if you derive from a script *and* hold a reference to one of its
+kind, the base class's own name hides the alias inside your class, so that one
+is `ScriptRef<Door>` too; the build warns, because the alternative is a member
+that compiles and does nothing.
+
+**It cannot cross a scene.** A reference resolves against the scene that is
+running, so one pointed into a level that is not loaded is simply null.
+
+**When not to reach for it.** A reference is one slot somebody drags once.
+
+- *One-to-many, or open-ended* — "every pickup in the scene" is a collider layer
+  and a query, and `assets/scripts/GameRules.cpp` is right to be data-driven:
+  adding an eleventh pickup needs no code change. `Autopilot.cpp`'s nearest
+  pickup changes every step and cannot be dragged at all.
+- *A target that does not exist yet* — a bullet spawned from a prefab at runtime
+  cannot have had a scorekeeper dragged onto it. `Bullet.cpp` sends a message
+  instead, and the payload *is* the whole content: there is no method to call.
+- *Just asking whether something is there* — an `eng::EntityRef` with a
+  `// [Door]` marker gives you the same filtered slot without naming the type
+  at all, which is what you want if the script is not even compiled in yet.
+  A typed reference earns its keep when you call the other script's methods.
+
+### An array folds up, with its length beside it
 
 ```cpp
 std::string walkAnimations[4];   // right, left, up, down
 ```
 
-shows up as four boxes — `walkAnimations[0]` to `walkAnimations[3]` — each an
-ordinary variable of the element's type, each saved separately, each with that
-same tooltip. Index it in the script as you would any array.
+shows up as one collapsible row with the array's name and `4 of 4` beside it:
+
+```
+  walkAnimations                4 of 4
+    [0]   [ hero.png#walk_right ]
+    [1]   [ hero.png#walk_left  ]
+    [2]   [ (none)              ]
+    [3]   [ (none)              ]
+```
+
+Each element is still an **ordinary variable** of the element's type —
+`walkAnimations[0]` to `walkAnimations[3]` — each saved separately, each
+overridable on a prefab instance, each with that same tooltip. Only the
+*looking* is grouped. Index it in the script as you would any array.
+
+**The number on the right is how many rows this entity offers**, and drag it
+to change that. It does **not** resize the array: the script's array is a
+fixed `[4]` for as long as the object exists, and there is no reallocating a
+C++ array from a tool. It is a convenience for an array that is longer than
+this particular entity uses — sixteen slots of which three are filled is
+thirteen blank rows otherwise.
+
+Shortening **hides** rows, it does not clear them, because a drag from 16 down
+to 1 and back would otherwise destroy fifteen values with nothing to give them
+back. So anything left outside the length that still holds a value is named
+under the header, with a button to clear it:
+
+> 2 hidden element(s) still have a value, and the script still reads them
+> &nbsp; `Clear them`
+
+The length is saved with the entity under the key `walkAnimations[]`, which is
+not a variable name and cannot collide with one.
 
 **A marker applies to every element.** Written `// [animation] right, left, up,
 down`, that same declaration gives all four the animation slot rather than four
@@ -1229,6 +1904,70 @@ Debug::ClearConsole();     // empties the Console; the log FILE is untouched
 Debug::IsDebugBuild();
 Debug::IsEditorAttached();
 ```
+
+---
+
+## Surviving a scene change
+
+```cpp
+void OnStart() { DontDestroyOnLoad(); }
+```
+
+This entity, its components, its scripts **with whatever they were holding**,
+and its children all stay as they are while the scene around them is replaced.
+Not rebuilt from a file on the other side — the same objects, the same
+behaviour instance, the same `EntityId`. A counter goes on counting; a
+coroutine goes on running.
+
+```cpp
+DontDestroyOnLoad();            // this entity
+DontDestroyOnLoad(someId);      // another one
+DestroyOnLoad(someId);          // take it back
+```
+
+**Only a scene change carries it.** That is narrower than it sounds, and the
+list is the whole of it:
+
+| | |
+| --- | --- |
+| loading another scene | **keeps** it. This is what the feature is for |
+| pressing **Stop** in the editor | destroys it. Play mode puts the authored scene back, and an object outliving that would leave the editor holding something no scene file describes |
+| **New Scene** | destroys it. "New" means nothing carried |
+| closing the project, quitting | destroys it |
+
+**Children come too**, and only the root needs marking. A marked *child* of an
+unmarked parent is **detached** and survives as a root, keeping its world
+position — Unity sidesteps that case by only honouring the call on a root;
+this says it out loud in the Console instead of ignoring you.
+
+**A survivor is not written into the scene it arrives in.** It came from
+somewhere else, and saving it there would put a copy in that file — so every
+visit would produce one more of it.
+
+### A singleton still needs the usual check
+
+Load a scene that has its own copy of your manager and there are now two,
+exactly as in Unity. **The name goes on meaning the one that survived**, so
+the newcomer can find it and stand down:
+
+```cpp
+void OnStart() {
+    if (FindEntity("Manager") != gameObject) { DestroySelf(); return; }
+    DontDestroyOnLoad();
+}
+```
+
+Both are reported in the Console while they coexist, because two things with
+one identity is still a mistake worth fixing — a name is how parents and
+references are recorded here.
+
+### When statics are still the right answer
+
+`assets/scripts/GameController.cpp` carries three floats across a scene change
+in file-statics, and still does. Statics carry **state**; they cannot carry a
+position, a child, a coroutine, a collider, or a reference something else
+holds. A fade is a float. An inventory the player is carrying is not — that
+wants the entity to survive.
 
 ---
 
@@ -1404,6 +2143,47 @@ The rest of it:
 | `IsFinished()` | A non-looping animation that reached its end. Stays true until something plays it again. |
 | `SetSpeed(2.0f)` | A multiplier on the sheet's frame rate. |
 
+### Which picture is on screen when nothing is playing
+
+An animation that is not playing either HOLDS the frame it was on or hands the
+sprite back the picture the `SpriteComponent` is authored to show. Which one it
+does is not a mood - it is decided by how it stopped:
+
+| How it stopped | What is on screen |
+| -------------- | ----------------- |
+| `Stop()` | The sprite's own image. |
+| `SetAnimationPath()`, including to `""` | The sprite's own image. |
+| Never started (`playOnStart` unticked) | The sprite's own image. |
+| Component removed | The sprite's own image. |
+| `Pause()` | **The frame it was on.** |
+| A non-looping clip that finished | **Its last frame.** |
+
+The two that hold do it on purpose. `Pause()` exists precisely to freeze a
+flipbook - if it reverted there would be no call left that does - and a
+non-looping clip's last frame is its RESULT: a door that finished opening is
+drawn open, and an explosion that reverted to frame 0 the instant it ended
+would play backwards into its own fuse.
+
+**`SetTexture` is authoritative whenever nothing is playing.** There is no need
+to stop first: `ShowFrame` only runs while a clip is advancing, so a picture
+you author while paused or after a finish appears immediately and is not
+overwritten. Playback takes the picture back only when you ask it to play.
+
+So if you want a character to stand in a pose of your choosing when it is not
+walking, author that pose and call `Stop()`, not `Pause()`:
+
+```cpp
+if (rb->Velocity().LengthSquared() < 0.01f) {   // standing still
+    anim->Stop();          // Pause() would keep the mid-stride frame
+    return;
+}
+renderer->SetTexture(standing[direction]);
+anim->Play(walkAnimation[direction]);
+```
+
+`Stop()` also rewinds, which costs nothing unless the clip sets `resume` - a
+walk cycle that starts over each time you set off is what you want anyway.
+
 **Do not keep the pointer.** Ask with `Find` each time, the same rule as for
 every other component: the component dies with its entity, and the whole scene
 is rebuilt by Play, by Stop and by every undo step.
@@ -1421,17 +2201,18 @@ Said plainly, so that nobody spends an afternoon looking:
 | `AudioSource`, `AudioClip`, `PlayOneShot` | **No audio at all.** Not a gap in the scripting API - the subsystem does not exist. |
 | `Animator`, animation clips | No animator. A frame index advanced with a float and a modulo is the current answer. |
 | `ParticleSystem` | None. Spawning entities works at the scale this engine targets. |
-| `StartCoroutine`, `WaitForSeconds` | None. An `enum Phase` plus a float is the house pattern, and `assets/scripts/GameRules.cpp` is the worked example. |
+| `StartCoroutine`, `WaitForSeconds`, `WaitForEndOfFrame` | **Here**, spelled with `co_yield`. See **Coroutines** - though `WaitForEndOfFrame` is an ordering barrier only, because there is no framebuffer readback for Unity's actual use of it. No `WaitUntil`/`WaitWhile`, no nesting and no string overload - each is a named compile error rather than a silent wrong answer. |
 | `Invoke`, `InvokeRepeating` | None. Count down a float in `OnFixedUpdate`. |
 | `OnEnable`, `OnDisable` | None. Writing one is a compile error that says so. Compare `IsActive()` against last step. |
 | `enabled`, `isActiveAndEnabled` | **No per-component switch.** `SetActive` / `IsActive` are the *entity's*, and `IsActive()` already means Unity's `activeInHierarchy` - a different thing from `enabled`, so it is left out rather than spelled misleadingly. |
 | `GetComponent<T>`, `CompareTag`, `FindObjectOfType<T>` | The same jobs under house names - `Find<T>`, `HasTag`, `FindFirstComponent<T>`. The *properties* are spelled Unity's way; the *methods* are not, and there are no Unity-spelled aliases for them. |
+| `public Bullet target;` and `public SpriteRenderer flash;` — object fields | **Here**, as `ScriptRef<Bullet> target;` and `SpriteRenderer flash;`. Unity's bare field works because it is a managed reference its serializer fixes up; this engine has no VM and no reflection, so a reference stores the target entity's *name* and resolves on every access — which is what the wrapper type is for. The common component ones are typedef'd to their Unity names, and a script's own is one `using` line if you want it spelled the same. See **A reference to a script on another entity**. |
 | `SendMessage`, `BroadcastMessage` | Different model: `eng::MessageBus` is queued and typed rather than a reflective call by method name. See **Talking to other scripts**. |
 | `print` | Deliberately absent. `eng::Debug::Log` is the one to use - it keeps the level, which `print` throws away, and fills in the channel so you do not have to. `ENGINE_LOG_INFO` and friends are still there for engine code, which means a different channel on almost every line. |
 | `LateUpdate` | None. Stage 700 already runs after all gameplay and movement; see `SystemOrder.h`. |
 | `Input.GetKey(KeyCode)` | Deliberately absent - use named actions. |
 | Gamepad, analog axes | Not wired up. `GetAxis` is currently Unity's `GetAxisRaw`. |
-| `DontDestroyOnLoad`, additive scenes | There is exactly one `Scene` in the process. Carry state in a file-static, or save it. |
+| additive scenes | There is exactly one `Scene` in the process. `DontDestroyOnLoad` IS supported — see below — but two scenes cannot be loaded at once. |
 | Object pooling | None. Spawn and destroy. |
 | Physics joints | None. Integrate one constraint by hand against `AddForce`. |
 | `PlayerPrefs` | None. |

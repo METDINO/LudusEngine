@@ -21,7 +21,12 @@
 
 #include <engine/Engine.h>
 
+#include <algorithm>
+#include <iterator>
 #include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 using namespace eng;
 
@@ -74,11 +79,20 @@ public:
     // where the bug was.
     EntityRef preset{"Preset"};
 
+    // ONE HOLDING A SCENE OBJECT AND ONE HOLDING A PREFAB. A rename has to
+    // follow the first and leave the second completely alone: a prefab path
+    // is not an entity name, and rewriting it because some entity happened to
+    // be called the same thing would silently break the spawn.
+    GameObjectRef linkedObject;
+    GameObjectRef linkedPrefab = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+
     void OnExpose(ScriptFields& fields) {
         fields.Var("anything", anything);
         fields.Ref("needsSprite", needsSprite, "SpriteComponent");
         fields.Ref("needsScript", needsScript, "TestPlain", "must carry a TestPlain");
         fields.Var("preset", preset);
+        fields.Var("linkedObject", linkedObject);
+        fields.Var("linkedPrefab", linkedPrefab);
     }
 
     void OnFixedUpdate() {}
@@ -121,6 +135,39 @@ public:
 class TestAutoAlt final : public ScriptBehaviour {
 public:
     float speed = 1.0f;
+
+    void OnFixedUpdate() {}
+};
+
+// ---------------------------------------------------------------------------
+//  AN ARRAY, exposed the way the generated exposer does it.
+//
+//  BY HAND HERE, with the names spelled out, because that is what the editor
+//  writes into the generated unit: one Var per element, named "slots[0]"
+//  upwards. See the loop in tools/ScriptVars.cpp. Writing it out is also the
+//  point - the grouping must work for a hand-written OnExpose too, and a test
+//  that went through the generator would not prove that.
+//
+//  A PLAIN VARIABLE EITHER SIDE OF IT, so a test can tell "the array's
+//  elements" from "every field".
+// ---------------------------------------------------------------------------
+class TestArrays final : public ScriptBehaviour {
+public:
+    float       before = 1.0f;
+    std::string slots[4];
+    int         counts[2]{};
+    float       after = 2.0f;
+
+    void OnExpose(ScriptFields& fields) {
+        fields.Var("before", before);
+        for (std::size_t i = 0; i < std::size(slots); ++i) {
+            fields.Var("slots[" + std::to_string(i) + "]", slots[i]);
+        }
+        for (std::size_t i = 0; i < std::size(counts); ++i) {
+            fields.Var("counts[" + std::to_string(i) + "]", counts[i]);
+        }
+        fields.Var("after", after);
+    }
 
     void OnFixedUpdate() {}
 };
@@ -211,6 +258,7 @@ ENGINE_REGISTER_SCRIPT(TestPlain)
 ENGINE_REGISTER_SCRIPT(TestRefs)
 ENGINE_REGISTER_SCRIPT(TestAuto)
 ENGINE_REGISTER_SCRIPT(TestAutoAlt)
+ENGINE_REGISTER_SCRIPT(TestArrays)
 
 // ===========================================================================
 //  Collecting the list
@@ -1402,6 +1450,252 @@ TEST_CASE("a reference finds a component on the far entity") {
     CHECK(ref.Find<SpriteComponent>() == nullptr);
 }
 
+TEST_CASE("a reference finds a component written the way a script writes it") {
+    // ======================================================================
+    //  THE SPELLING THAT COMES OUT OF A SCRIPT, which is not the one above.
+    //
+    //  Inside a script a bare `SpriteComponent` is an ALIAS for
+    //  ComponentRef<eng::SpriteComponent> - see ComponentAliases.h - so the
+    //  lookup an author actually writes is
+    //  Find<ComponentRef<eng::SpriteComponent>>(). Every other entry point
+    //  unwraps that through eng::FindTargetOf before looking anything up:
+    //  Entity::Find, Entity::Add, FindInChildren, FindInParents, and the
+    //  whole ScriptBehaviour family.
+    //
+    //  EntityRef::Find did not. It declared its return type as T* while
+    //  handing back FindTargetOf<T>::type*, so the identical line compiled
+    //  through an entity and was a HARD ERROR through a reference to one -
+    //  naming, in the message, a type the author had never typed.
+    //
+    //  The macro is expanded at function scope, which is legal for
+    //  alias-declarations and is how test_scriptvars checks the same macro
+    //  without leaking nineteen names into the rest of the file.
+    // ======================================================================
+    ENGINE_SCRIPT_COMPONENT_REFERENCES
+
+    TestScene world;
+    Entity&   decorated = world.Add("Decorated");
+    REQUIRE(decorated.AddComponent("SpriteComponent") != nullptr);
+    world.Add("Bare");
+
+    EntityRef ref;
+    ref.Set("Decorated");
+
+    // THE SIGNATURE, which is the half that was wrong. A decltype catches it
+    // whatever the bodies do.
+    static_assert(std::is_same_v<decltype(ref.Find<SpriteComponent>()),
+                                 eng::SpriteComponent*>,
+                  "EntityRef::Find must unwrap a reference type, as "
+                  "Entity::Find does");
+    static_assert(std::is_same_v<decltype(ref.Find<eng::SpriteComponent>()),
+                                 eng::SpriteComponent*>,
+                  "and must leave a plain component type alone");
+
+    // AND THE BODY, which is what proves the unwrapped lookup runs rather
+    // than merely type-checking.
+    eng::SpriteComponent* found = ref.Find<SpriteComponent>();
+    CHECK(found != nullptr);
+    CHECK(found == decorated.Find<eng::SpriteComponent>());
+
+    // The two spellings are the same question asked twice.
+    CHECK(ref.Find<SpriteComponent>() == ref.Find<eng::SpriteComponent>());
+
+    // And the three ways of resolving to nothing still answer alike.
+    ref.Set("Bare");
+    CHECK(ref.Find<SpriteComponent>() == nullptr);
+    ref.Set("Gone");
+    CHECK(ref.Find<SpriteComponent>() == nullptr);
+    ref.Clear();
+    CHECK(ref.Find<SpriteComponent>() == nullptr);
+}
+
+TEST_CASE("every scene-wide and multi-result lookup unwraps a bare name too") {
+    // ======================================================================
+    //  THE SAME DEFECT AS EntityRef::Find, IN FIVE MORE PLACES.
+    //
+    //  Each of these declared a plain T while handing back
+    //  FindTargetOf<T>::type, so the bare spelling a script writes was a hard
+    //  error and only the qualified one worked. Which of a pair you got was
+    //  arbitrary from the outside: FindFirstWith and CountWith never NAME the
+    //  result type, so they always accepted the bare name, and they sit in the
+    //  documentation right beside the three here that did not.
+    // ======================================================================
+    ENGINE_SCRIPT_COMPONENT_REFERENCES
+
+    TestScene world;
+    Entity&   parent = world.Add("Parent");
+    REQUIRE(parent.AddComponent("SpriteComponent") != nullptr);
+    Entity&   child = world.Add("Child");
+    REQUIRE(child.AddComponent("SpriteComponent") != nullptr);
+    child.Transform().SetParent(&parent.Transform());
+
+    // ---- Scene::FindFirstComponent ---------------------------------------
+    static_assert(
+        std::is_same_v<decltype(world.scene.FindFirstComponent<SpriteComponent>()),
+                       eng::SpriteComponent*>,
+        "Scene::FindFirstComponent must unwrap");
+    CHECK(world.scene.FindFirstComponent<SpriteComponent>() != nullptr);
+    CHECK(world.scene.FindFirstComponent<SpriteComponent>() ==
+          world.scene.FindFirstComponent<eng::SpriteComponent>());
+
+    // ---- ScriptBehaviour::FindFirstComponent, which is the spelling the
+    //      scripting reference actually lists (no `scene->`) ---------------
+    static_assert(
+        std::is_same_v<decltype(std::declval<const eng::ScriptBehaviour&>()
+                                    .FindFirstComponent<SpriteComponent>()),
+                       eng::SpriteComponent*>,
+        "ScriptBehaviour::FindFirstComponent must unwrap");
+
+    // ---- Scene::ForEachWith, which breaks twice over: the std::function
+    //      element type AND the local inside the body ---------------------
+    std::size_t seen = 0;
+    world.scene.ForEachWith<SpriteComponent>(
+        [&seen](Entity&, eng::SpriteComponent&) { ++seen; });
+    CHECK(seen == 2);
+
+    // ---- the three FindAll members, whose vector parameter is the thing
+    //      that has to unwrap - a caller cannot be asked to declare a
+    //      std::vector<ComponentRef<SpriteComponent>*> ---------------------
+    std::vector<eng::SpriteComponent*> found;
+    CHECK(parent.FindAll<SpriteComponent>(found) == 1);
+    CHECK(parent.FindAllInChildren<SpriteComponent>(found) == 2);
+    CHECK(child.FindAllInParents<SpriteComponent>(found) == 2);
+
+    // The ScriptBehaviour FindAll family already spelled its parameter
+    // std::vector<typename FindTargetOf<T>::type*>, which is what made the
+    // Entity ones underneath it the odd three out.
+    static_assert(
+        std::is_same_v<decltype(std::declval<const eng::ScriptBehaviour&>()
+                                    .FindAll<SpriteComponent>(found)),
+                       std::size_t>,
+        "ScriptBehaviour::FindAll already took the unwrapped vector");
+}
+
+TEST_CASE("a reference finds a SCRIPT through the wrapped spelling too") {
+    // ======================================================================
+    //  THE OTHER HALF OF THE UNWRAPPING, and the half the header comment
+    //  used to deny outright ("use FindScriptOn for another script").
+    //
+    //  A bare SCRIPT name inside a script is an eng::ScriptRef, FindTargetOf
+    //  takes it back to the class, the class has no kTypeName, so Entity::Find
+    //  routes it to FindScriptOnEntity - and the reference finds the script.
+    //
+    //  Spelled out explicitly here because the per-script aliases are
+    //  GENERATED per project rather than living in a macro a test can expand,
+    //  unlike the component ones above.
+    // ======================================================================
+    TestScene world;
+    world.AddWithScript("Carrier", "TestRefs");
+    world.Add("Bare");
+
+    EntityRef ref;
+    ref.Set("Carrier");
+
+    static_assert(std::is_same_v<decltype(ref.Find<eng::ScriptRef<TestRefs>>()),
+                                 TestRefs*>,
+                  "a ScriptRef must unwrap to the script class it names");
+
+    TestRefs* found = ref.Find<eng::ScriptRef<TestRefs>>();
+    CHECK(found != nullptr);
+
+    // The explicit class spelling, which already worked, agrees with it.
+    CHECK(found == ref.Find<TestRefs>());
+
+    // And an entity carrying no such script is the same null as everything
+    // else that fails to resolve.
+    ref.Set("Bare");
+    CHECK(ref.Find<eng::ScriptRef<TestRefs>>() == nullptr);
+}
+
+TEST_CASE("a reference can be INITIALISED from a lookup, not only assigned") {
+    // ======================================================================
+    //  THE ASYMMETRY THAT WAS REPORTED FROM GAME CODE.
+    //
+    //  ComponentRef had operator=(T*), so that
+    //      renderer = Find<SpriteComponent>();
+    //  read naturally - but no matching CONSTRUCTOR. Copy-initialisation is
+    //  resolved against constructors and never reaches an assignment
+    //  operator, so the one-line form
+    //      SpriteComponent renderer = Find<SpriteComponent>();
+    //  was a hard error while the two-line form compiled, and the message
+    //  named ComponentRef<eng::SpriteComponent> - a type the author never
+    //  typed - on a line that reads perfectly.
+    //
+    //  It only became reachable when a bare component name started meaning a
+    //  reference; before that the same line declared a component by value and
+    //  failed for an ordinary reason.
+    // ======================================================================
+    ENGINE_SCRIPT_COMPONENT_REFERENCES
+
+    TestScene world;
+    Entity&   decorated = world.Add("Decorated");
+    REQUIRE(decorated.AddComponent("SpriteComponent") != nullptr);
+
+    // (1) INITIALISED from a lookup - the form that did not compile.
+    SpriteComponent fromInit = decorated.Find<SpriteComponent>();
+    CHECK(static_cast<bool>(fromInit));
+    CHECK(fromInit.TargetName() == "Decorated");
+    CHECK(fromInit.Get() == decorated.Find<eng::SpriteComponent>());
+
+    // (2) ASSIGNED, which always worked and must keep working.
+    SpriteComponent fromAssign;
+    fromAssign = decorated.Find<SpriteComponent>();
+    CHECK(fromAssign == fromInit);
+
+    // (3) THE DEFAULT CONSTRUCTOR SURVIVED. Declaring any constructor
+    // suppresses the implicit one, and every Inspector slot is declared
+    // exactly this way - so losing it would have broken every script.
+    SpriteComponent empty;
+    CHECK_FALSE(empty.IsSet());
+
+    // (4) A FAILED LOOKUP INITIALISES TO EMPTY rather than to anything else,
+    // which is the rule the assignment already followed: a reference holding
+    // its previous target after a failed lookup would answer the next
+    // `if (ref)` with yes and hand back the wrong component.
+    Entity&         bare = world.Add("Bare");
+    SpriteComponent fromNothing = bare.Find<SpriteComponent>();
+    CHECK_FALSE(fromNothing.IsSet());
+
+    // (5) THE EXPLICIT SPELLING TOO. Inside a script the unqualified name is
+    // already a reference, so this is ComponentRef<ComponentRef<...>>, which
+    // inherits the constructor only because the specialisation says so.
+    eng::ComponentRef<SpriteComponent> doubled = decorated.Find<SpriteComponent>();
+    CHECK(doubled.TargetName() == "Decorated");
+
+    // And the qualified form, which is the plain template.
+    eng::ComponentRef<eng::SpriteComponent> qualified =
+        decorated.Find<eng::SpriteComponent>();
+    CHECK(qualified.TargetName() == "Decorated");
+}
+
+TEST_CASE("a SCRIPT reference can be initialised from a lookup too") {
+    // The same gap existed on ScriptRef, where the one-line form is if
+    // anything more natural: `Invisibility invis = Find<Invisibility>();`
+    TestScene world;
+    Entity&   carrier = world.AddWithScript("Carrier", "TestRefs");
+    world.Add("Bare");
+
+    TestRefs* script = eng::FindScriptOn<TestRefs>(carrier);
+    REQUIRE(script != nullptr);
+
+    eng::ScriptRef<TestRefs> fromInit = script;
+    CHECK(static_cast<bool>(fromInit));
+    CHECK(fromInit.TargetName() == "Carrier");
+    CHECK(fromInit.Get() == script);
+
+    eng::ScriptRef<TestRefs> fromAssign;
+    fromAssign = script;
+    CHECK(fromAssign == fromInit);
+
+    // Null clears, here as in the assignment.
+    eng::ScriptRef<TestRefs> fromNull = static_cast<TestRefs*>(nullptr);
+    CHECK_FALSE(fromNull.IsSet());
+
+    // The doubled spelling, which the specialisation has to pass through.
+    eng::ScriptRef<eng::ScriptRef<TestRefs>> doubled = script;
+    CHECK(doubled.TargetName() == "Carrier");
+}
+
 TEST_CASE("a reference resolves against the ACTIVE scene, whichever that is") {
     // Not a detail worth skipping: it is why a reference saved in a level file
     // means the same thing every time that level is loaded, into whatever
@@ -1498,7 +1792,12 @@ TEST_CASE("a reference is collected like any other variable") {
     const Attached attached("TestRefs");
 
     REQUIRE(attached.component.IsResolved());
-    REQUIRE(attached.component.Fields().Count() == 4);
+
+    // Four EntityRefs and the two GameObjectRefs beside them. The count is
+    // asserted rather than the names alone so that a field silently failing
+    // to be collected is a failure here rather than a surprise somewhere
+    // later.
+    REQUIRE(attached.component.Fields().Count() == 6);
 
     REQUIRE(attached.Field("anything") != nullptr);
     CHECK(attached.Field("anything")->type == ScriptFieldType::Entity);
@@ -1798,9 +2097,11 @@ TEST_CASE("a script on another entity can be found by its type") {
     Entity&   entity = world.AddWithScript("Scripted", "TestPlain");
 
     // TestPlain is nameable here because this test file declares it. A script
-    // under assets/scripts is in an anonymous namespace and is not - which is
-    // why a reference is usually constrained by NAME instead. See the note in
-    // ScriptComponent.h.
+    // under assets/scripts needs the same thing - a declaration - which is
+    // what putting its class in a header beside it buys, and what
+    // eng::ScriptRef<T> is for. Scripts share the global namespace, so nothing
+    // hides the name; they used to each sit in an anonymous `namespace { }`
+    // and no longer do. See scene/ScriptRef.h.
     CHECK(FindScriptOn<TestPlain>(entity) != nullptr);
     CHECK(FindScriptOn<TestBounded>(entity) == nullptr);
 }
@@ -2140,11 +2441,18 @@ TEST_CASE("every field type survives the JSON round trip, and none of them write
     AnimationRef walk{"textures/hero.png#walk_left"};
     ImageRef     icon{"textures/ui/key.png"};
 
+    // ONE PER TYPE, and exactly one: the completeness check at the bottom
+    // compares this array's LENGTH against how many types have a name, so a
+    // second GameObjectRef here would break that guard rather than
+    // strengthening it. The other half of this one - a scene object rather
+    // than a prefab - is swept by its own case below.
+    GameObjectRef spawn = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+
     const ScriptField everyField[] = {
         Bind(number),  Bind(count),  Bind(enabled),
         Bind(label),   Bind(offset), Bind(tint),
         Bind(target),  Bind(bullet), Bind(walk),
-        Bind(icon),
+        Bind(icon),    Bind(spawn),
     };
 
     for (const ScriptField& field : everyField) {
@@ -2371,4 +2679,548 @@ TEST_CASE("a marked string stores the CANONICAL kind, however it was spelled") {
     const ScriptField* two = fields.Find("picture");
     REQUIRE(two != nullptr);
     CHECK(two->requiredType == "image");
+}
+
+// ===========================================================================
+//  ScriptRef - a typed slot pointed at another script
+// ===========================================================================
+
+TEST_CASE("a script reference is a field the Inspector can draw") {
+    // THE SPECIALIZATION IS LOAD-BEARING AND SILENT IF FORGOTTEN. Ref() itself
+    // is not a template and asks no questions - it binds an EntityRef& and the
+    // derived-to-base conversion satisfies it - so a hand-written OnExpose
+    // works either way. The generated exposer's nested Traits<...>::known
+    // requirement is the only thing between a correct declaration and a
+    // variable that never appears.
+    CHECK(fields::Traits<ScriptRef<TestBounded>>::known);
+    CHECK(fields::Traits<ScriptRef<TestBounded>>::type == ScriptFieldType::Entity);
+
+    // AND THE BASE IS AT OFFSET 0, which is what makes ScriptField::AsEntityRef
+    // an unchecked cast rather than a lie. Adding a member or a vtable here
+    // would break every slot in the Inspector at once.
+    ScriptRef<TestBounded> ref;
+    CHECK(static_cast<const void*>(&ref) ==
+          static_cast<const void*>(static_cast<EntityRef*>(&ref)));
+
+    ScriptFields fields;
+    fields.Ref("target", ref, "TestBounded");
+    REQUIRE(fields.Count() == 1);
+
+    const ScriptField* field = fields.Find("target");
+    REQUIRE(field != nullptr);
+    CHECK(field->type == ScriptFieldType::Entity);
+    CHECK(field->requiredType == "TestBounded");
+    CHECK(field->AsEntityRef() == static_cast<EntityRef*>(&ref));
+}
+
+TEST_CASE("a script reference resolves to the other script, and to nothing else") {
+    TestScene world;
+    world.AddWithScript("Bounded", "TestBounded");
+
+    ScriptRef<TestBounded> ref;
+
+    // Empty: no name, so nothing to resolve.
+    CHECK(!ref.IsSet());
+    CHECK(ref.Get() == nullptr);
+    CHECK(!static_cast<bool>(ref));
+
+    ref.Set("Bounded");
+    REQUIRE(ref.Get() != nullptr);
+    CHECK(static_cast<bool>(ref));
+
+    // WHAT IT IS FOR: the other script's own members, through `->`.
+    CHECK(ref->lives == 3);
+    ref->lives = 1;
+    CHECK(ref.Get()->lives == 1);
+
+    // A name that resolves to an entity WITHOUT that script is null, and is
+    // not told apart from the others - a caller handles them all the same way.
+    // IsSet() is what answers "was something dropped on it".
+    world.AddWithScript("Plain", "TestPlain");
+    ref.Set("Plain");
+    CHECK(ref.IsSet());
+    CHECK(ref.Get() == nullptr);
+    CHECK(!static_cast<bool>(ref));
+
+    // And so is a name that resolves to no entity at all.
+    ref.Set("Nothing");
+    CHECK(ref.Get() == nullptr);
+}
+
+TEST_CASE("a script reference asks for the type, not the name it was set to") {
+    // Two scripts on one entity: the reference picks the one that IS a T,
+    // which is the difference between this and a constrained EntityRef.
+    TestScene world;
+    Entity&   entity = world.AddWithScript("Both", "TestBounded");
+    {
+        auto        second = std::make_unique<ScriptComponent>();
+        Json        node;
+        std::string error;
+        node["script"] = "TestPlain";
+        REQUIRE(second->Deserialize(node, error));
+        entity.AddComponent(std::move(second));
+    }
+
+    ScriptRef<TestBounded> bounded;
+    bounded.Set("Both");
+    CHECK(bounded.Get() != nullptr);
+
+    ScriptRef<TestPlain> plain;
+    plain.Set("Both");
+    CHECK(plain.Get() != nullptr);
+}
+
+// ===========================================================================
+//  ARRAYS
+//
+//  An array is exposed as one ORDINARY VARIABLE PER ELEMENT, named
+//  "slots[0]" upwards, and that is what makes it save, override, revert and
+//  undo like anything else. Everything below is about the one thing the
+//  flattening lost: that the elements belong together, which is what the
+//  Inspector needs in order to fold them under one name with one length.
+// ===========================================================================
+
+TEST_CASE("an array element knows its array and its index") {
+    Attached attached("TestArrays");
+
+    const ScriptField* element = attached.Field("slots[2]");
+    REQUIRE(element != nullptr);
+    CHECK(element->arrayName == "slots");
+    CHECK(element->arrayIndex == 2);
+
+    // AND ITS FULL NAME IS UNCHANGED, which is the half that must not move:
+    // it is the key in the scene file and the id of the widget.
+    CHECK(element->name == "slots[2]");
+}
+
+TEST_CASE("an ordinary variable is not an array element") {
+    Attached attached("TestArrays");
+
+    for (const char* name : {"before", "after"}) {
+        const ScriptField* field = attached.Field(name);
+        REQUIRE(field != nullptr);
+        CHECK(field->arrayName.empty());
+        CHECK(field->arrayIndex == -1);
+    }
+}
+
+TEST_CASE("an array's length is how many elements it exposed") {
+    Attached attached("TestArrays");
+
+    CHECK(attached.component.Fields().ArrayLength("slots") == 4);
+    CHECK(attached.component.Fields().ArrayLength("counts") == 2);
+
+    // A PLAIN VARIABLE HAS NO LENGTH rather than a length of one, and neither
+    // does a name nothing exposed. Both answer 0, because "how long is the
+    // array called before?" has no other honest answer.
+    CHECK(attached.component.Fields().ArrayLength("before") == 0);
+    CHECK(attached.component.Fields().ArrayLength("nothing") == 0);
+    CHECK(attached.component.Fields().ArrayLength("") == 0);
+}
+
+TEST_CASE("only a bracketed number is an index") {
+    // THE PARSE IS THE WHOLE RISK. A C++ identifier cannot contain a bracket,
+    // so anything ending in "[<digits>]" came from the array loop - but a
+    // HAND-WRITTEN OnExpose may pass any string at all, and a name read as an
+    // element when it is not would be folded under a header nobody wrote.
+    float        value = 0.0f;
+    ScriptFields fields;
+    fields.Var("ok[0]", value);
+    fields.Var("ok[12]", value);
+    fields.Var("empty[]", value);
+    fields.Var("letters[i]", value);
+    fields.Var("negative[-1]", value);
+    fields.Var("unclosed[3", value);
+    fields.Var("[5]", value);
+    fields.Var("plain", value);
+
+    CHECK(fields.Find("ok[0]")->arrayIndex == 0);
+    CHECK(fields.Find("ok[12]")->arrayIndex == 12);
+    CHECK(fields.Find("ok[12]")->arrayName == "ok");
+    CHECK(fields.ArrayLength("ok") == 2);
+
+    for (const char* name : {"empty[]", "letters[i]", "negative[-1]",
+                             "unclosed[3", "[5]", "plain"}) {
+        const ScriptField* field = fields.Find(name);
+        REQUIRE(field != nullptr);
+        CHECK(field->arrayIndex == -1);
+        CHECK(field->arrayName.empty());
+    }
+
+    // "[5]" HAS NO NAME IN FRONT OF IT, so there is no array for it to be an
+    // element of. Taking it would leave a header with an empty title.
+    CHECK(fields.ArrayLength("") == 0);
+}
+
+TEST_CASE("an array's used length defaults to all of it") {
+    Attached attached("TestArrays");
+
+    CHECK(attached.component.ArrayLengthUsed("slots") == 4);
+    CHECK(attached.component.ArrayLengthUsed("counts") == 2);
+    CHECK(attached.component.ArrayLengthUsed("before") == 0);
+    CHECK(attached.component.ArrayLengthUsed("nothing") == 0);
+}
+
+TEST_CASE("a shortened array remembers its length, and a whole one does not") {
+    Attached attached("TestArrays");
+
+    attached.component.SetArrayLengthUsed("slots", 2);
+    CHECK(attached.component.ArrayLengthUsed("slots") == 2);
+
+    // IT IS IN THE SCENE FILE under a key that cannot be a variable: the
+    // elements are "slots[0]" upwards and every other field is a C++
+    // identifier, so neither can be "slots[]".
+    CHECK(attached.component.SavedValues().contains("slots[]"));
+
+    // AND GOING BACK TO THE WHOLE ARRAY LEAVES NOTHING BEHIND. An array
+    // nobody shortened should look in the file exactly as it did before this
+    // existed, and dragging the length back out is how a shortening is undone.
+    attached.component.SetArrayLengthUsed("slots", 4);
+    CHECK(attached.component.ArrayLengthUsed("slots") == 4);
+    CHECK(!attached.component.SavedValues().contains("slots[]"));
+}
+
+TEST_CASE("a length is clamped to the array, from either end") {
+    Attached attached("TestArrays");
+
+    attached.component.SetArrayLengthUsed("slots", 99);
+    CHECK(attached.component.ArrayLengthUsed("slots") == 4);
+
+    attached.component.SetArrayLengthUsed("slots", 0);
+    CHECK(attached.component.ArrayLengthUsed("slots") == 0);
+
+    // A NAME THAT IS NOT AN ARRAY CANNOT BE GIVEN ONE. Writing "before[]"
+    // into the file would be a key nothing ever reads and that
+    // UnusedSavedValues would then offer to delete.
+    attached.component.SetArrayLengthUsed("before", 1);
+    CHECK(!attached.component.SavedValues().contains("before[]"));
+}
+
+TEST_CASE("a length hand-edited into a scene file cannot ask for rows that are not there") {
+    // Four elements in the script, 40 in the file. Nothing clamps on load -
+    // deliberately, as with a Range - so the clamp has to be in the reading.
+    Attached attached("TestArrays", Json{{"slots[]", 40}});
+    CHECK(attached.component.ArrayLengthUsed("slots") == 4);
+}
+
+TEST_CASE("a length that is not a number falls back to the whole array") {
+    // A scene file is text somebody may have typed. Every one of these used
+    // to be a cast of whatever was there - and 1e30 to an int is undefined
+    // behaviour, not a large number.
+    for (const Json& nonsense : {Json("two"), Json(true), Json(Json::array()),
+                                 Json(-3), Json(nullptr)}) {
+        Attached          attached("TestArrays", Json{{"slots[]", nonsense}});
+        const std::size_t used = attached.component.ArrayLengthUsed("slots");
+        CHECK(used <= 4);
+        if (nonsense.is_number()) {
+            CHECK(used == 0);   // -3 is "none of them", clamped at the bottom
+        } else {
+            CHECK(used == 4);
+        }
+    }
+}
+
+TEST_CASE("an array's length is not reported as a saved value nothing uses") {
+    // ======================================================================
+    //  THE KEY MATCHES NO FIELD AND NEVER WILL, so without an exemption it
+    //  was reported as a leftover - and the Inspector draws a "Forget them"
+    //  button beside that report, which would have deleted it.
+    // ======================================================================
+    Attached attached("TestArrays");
+    attached.component.SetArrayLengthUsed("slots", 1);
+
+    const std::vector<std::string> unused = attached.component.UnusedSavedValues();
+    CHECK(std::find(unused.begin(), unused.end(), "slots[]") == unused.end());
+
+    REQUIRE(attached.component.ForgetUnusedSavedValues() == 0);
+    CHECK(attached.component.ArrayLengthUsed("slots") == 1);
+}
+
+TEST_CASE("a length left behind by an array that has gone IS a leftover") {
+    // The exemption is only for an array that exists. A length for an array
+    // somebody renamed is exactly as orphaned as a renamed variable's value,
+    // and gets the same treatment: kept, reported, and dropped only if asked.
+    Attached attached("TestArrays", Json{{"gone[]", 2}});
+
+    const std::vector<std::string> unused = attached.component.UnusedSavedValues();
+    CHECK(std::find(unused.begin(), unused.end(), "gone[]") != unused.end());
+
+    CHECK(attached.component.ForgetUnusedSavedValues() == 1);
+    CHECK(!attached.component.SavedValues().contains("gone[]"));
+}
+
+TEST_CASE("an element of a shortened array keeps its value, and is still saved") {
+    // SHORTENING HIDES ROWS, IT DOES NOT CLEAR THEM - which is the one thing
+    // the Inspector has to say out loud, because the script goes on reading
+    // the whole array. A drag from 4 to 1 that destroyed three values would
+    // have nothing to give them back.
+    Attached attached("TestArrays");
+    REQUIRE(attached.Field("slots[3]") != nullptr);
+
+    *attached.Field("slots[3]")->AsString() = "still here";
+    REQUIRE(attached.component.SaveFieldValue("slots[3]"));
+
+    attached.component.SetArrayLengthUsed("slots", 1);
+    CHECK(*attached.Field("slots[3]")->AsString() == "still here");
+    CHECK(attached.component.IsFieldOverridden("slots[3]"));
+    CHECK(attached.component.SavedValues().at("slots[3]") == "still here");
+}
+
+// ===========================================================================
+//  THE ONE REFERENCE THAT CAN BE EITHER KIND OF THING.
+//
+//  eng::GameObjectRef - Unity's `public GameObject` - holds a prefab OR an
+//  object already in the scene, chosen by what gets dragged onto it rather
+//  than by the type written in the script. The cases below are mostly about
+//  the two halves NOT being confusable: a name must never come back where a
+//  path was expected, the JSON must say which half it is rather than leaving
+//  it to be guessed, and an unset one must write an empty object rather than
+//  a null - because a null is read by a prefab instance as "erase this
+//  field".
+// ===========================================================================
+
+TEST_CASE("a GameObject reference knows which kind of thing it is") {
+    GameObjectRef nothing;
+    CHECK_FALSE(nothing.IsSet());
+    CHECK_FALSE(nothing.IsPrefab());
+    CHECK_FALSE(nothing.IsSceneObject());
+    CHECK(nothing.Target() == nullptr);
+
+    const GameObjectRef prefab = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+    CHECK(prefab.IsSet());
+    CHECK(prefab.IsPrefab());
+    CHECK_FALSE(prefab.IsSceneObject());
+    CHECK(prefab.PrefabPath() == "prefabs/bullet.oprefab");
+
+    // THE HALVES DO NOT LEAK INTO EACH OTHER. A caller that mixed them up
+    // would otherwise get a path where it expected a name and spend a while
+    // looking for an entity called "prefabs/bullet.oprefab".
+    CHECK(prefab.Name().empty());
+
+    const GameObjectRef object = GameObjectRef::ToSceneObject("Door");
+    CHECK(object.IsSceneObject());
+    CHECK(object.Name() == "Door");
+    CHECK(object.PrefabPath().empty());
+}
+
+TEST_CASE("a GameObject reference still behaves like the pointer it replaced") {
+    // `GameObject` WAS `typedef eng::Entity*`, and every line written against
+    // that spelling has to go on meaning what it meant - which is the whole
+    // reason the conversion and the arrow are there rather than an explicit
+    // Target() call at every use.
+    ComponentFactory::RegisterBuiltins();
+
+    Scene scene;
+    Scene::SetActive(&scene);
+
+    Entity* door = scene.Get(scene.CreateEntity("Door"));
+    REQUIRE(door != nullptr);
+
+    GameObjectRef ref = door;        // implicit, from a plain pointer
+    CHECK(ref.IsSceneObject());
+    CHECK(ref.Name() == "Door");
+
+    Entity* back = ref;              // implicit, back to a plain pointer
+    CHECK(back == door);
+    CHECK(ref->Name() == "Door");    // operator->
+    CHECK(ref != nullptr);
+
+    GameObjectRef cleared = nullptr; // `GameObject thing = nullptr;`
+    CHECK_FALSE(cleared.IsSet());
+    CHECK(cleared == GameObjectRef{});
+
+    Scene::SetActive(nullptr);
+}
+
+TEST_CASE("a GameObject reference holding a scene object resolves, and stops when it goes") {
+    ComponentFactory::RegisterBuiltins();
+
+    Scene scene;
+    Scene::SetActive(&scene);
+
+    const EntityId id   = scene.CreateEntity("Door");
+    Entity*        door = scene.Get(id);
+    REQUIRE(door != nullptr);
+
+    const GameObjectRef ref = GameObjectRef::ToSceneObject("Door");
+    CHECK(ref.Target() == door);
+    CHECK(ref.Id() == id);
+
+    // IT HOLDS A NAME, NOT AN ADDRESS, so the reference survives the thing it
+    // names being destroyed - and answers null rather than handing back
+    // memory that has been reused. EntityRef.h has the argument at length.
+    scene.DestroyEntityImmediate(id);
+    CHECK(ref.Target() == nullptr);
+    CHECK(ref.IsSet());   // still SET, just pointing at nothing
+
+    Scene::SetActive(nullptr);
+}
+
+TEST_CASE("a prefab reference resolves to nothing, which is not a bug") {
+    // A prefab is not in the scene: there is no transform to read and no
+    // position to ask for. It becomes an entity when it is instantiated, and
+    // the alternative - silently building one every time somebody read a
+    // position - would be far worse than a null.
+    const GameObjectRef ref = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+    CHECK(ref.IsSet());
+    CHECK(ref.Target() == nullptr);
+    CHECK(ref.Id().IsNull());
+}
+
+TEST_CASE("a GameObject field says which half it is in the file") {
+    GameObjectRef     prefab = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+    const ScriptField prefabField = Bind(prefab);
+
+    const Json writtenPrefab = FieldToJson(prefabField);
+    REQUIRE(writtenPrefab.is_object());
+    CHECK(writtenPrefab.contains("prefab"));
+    CHECK(writtenPrefab["prefab"].get<std::string>() == "prefabs/bullet.oprefab");
+
+    GameObjectRef     object      = GameObjectRef::ToSceneObject("Door");
+    const ScriptField objectField = Bind(object);
+
+    const Json writtenObject = FieldToJson(objectField);
+    REQUIRE(writtenObject.is_object());
+    CHECK(writtenObject.contains("entity"));
+    CHECK(writtenObject["entity"].get<std::string>() == "Door");
+
+    // ======================================================================
+    //  AN UNSET ONE IS AN EMPTY OBJECT, NOT A NULL.
+    //
+    //  A null is what a prefab instance reads as "erase this field" - so a
+    //  GameObject variable nobody had filled in would, on the first save,
+    //  delete that field from every instance of the prefab.
+    // ======================================================================
+    GameObjectRef     empty      = {};
+    const ScriptField emptyField = Bind(empty);
+    const Json        writtenEmpty = FieldToJson(emptyField);
+    CHECK_FALSE(writtenEmpty.is_null());
+    CHECK(writtenEmpty.is_object());
+    CHECK(writtenEmpty.empty());
+}
+
+TEST_CASE("a GameObject field reads both halves back, and a bare string as a name") {
+    GameObjectRef     value;
+    const ScriptField field = Bind(value);
+    std::string       error;
+
+    Json asPrefab   = Json::object();
+    asPrefab["prefab"] = "prefabs/bullet.oprefab";
+    REQUIRE(JsonFitsFieldType(ScriptFieldType::GameObject, asPrefab));
+    REQUIRE(ReadFieldFromJson(field, asPrefab, error));
+    CHECK(value.IsPrefab());
+    CHECK(value.PrefabPath() == "prefabs/bullet.oprefab");
+
+    Json asEntity     = Json::object();
+    asEntity["entity"] = "Door";
+    REQUIRE(ReadFieldFromJson(field, asEntity, error));
+    CHECK(value.IsSceneObject());
+    CHECK(value.Name() == "Door");
+
+    // A BARE STRING IS AN ENTITY NAME, which is what somebody hand-editing a
+    // scene will type - and it is the harmless half to guess. A name that
+    // resolves to nothing is visible in the Inspector; a path guessed wrong
+    // would be a spawner that silently spawns nothing.
+    REQUIRE(JsonFitsFieldType(ScriptFieldType::GameObject, Json("Lever")));
+    REQUIRE(ReadFieldFromJson(field, Json("Lever"), error));
+    CHECK(value.IsSceneObject());
+    CHECK(value.Name() == "Lever");
+
+    // And the shapes that are not either of those are refused rather than
+    // read as something.
+    CHECK_FALSE(JsonFitsFieldType(ScriptFieldType::GameObject, Json(7)));
+    CHECK_FALSE(JsonFitsFieldType(ScriptFieldType::GameObject, Json::array({1, 2})));
+
+    Json wrongInsides      = Json::object();
+    wrongInsides["prefab"] = 7;
+    CHECK_FALSE(JsonFitsFieldType(ScriptFieldType::GameObject, wrongInsides));
+}
+
+TEST_CASE("a GameObject field round trips through the file both ways") {
+    GameObjectRef     original = GameObjectRef::ToPrefab("prefabs/bullet.oprefab");
+    const ScriptField from     = Bind(original);
+
+    GameObjectRef     restored;
+    const ScriptField into = Bind(restored);
+
+    std::string error;
+    REQUIRE(ReadFieldFromJson(into, FieldToJson(from), error));
+    CHECK(restored == original);
+
+    original.SetSceneObject("Door");
+    REQUIRE(ReadFieldFromJson(into, FieldToJson(from), error));
+    CHECK(restored == original);
+    CHECK(restored.IsSceneObject());
+
+    // AN UNSET ONE ROUND TRIPS TOO, which matters because the empty object it
+    // writes has to read back as "nothing" rather than as a scene object
+    // with an empty name.
+    original.Clear();
+    REQUIRE(ReadFieldFromJson(into, FieldToJson(from), error));
+    CHECK_FALSE(restored.IsSet());
+}
+
+TEST_CASE("renaming an entity moves a GameObject reference too, but not a prefab one") {
+    // ======================================================================
+    //  THE SECOND KIND OF REFERENCE THAT HOLDS A NAME.
+    //
+    //  RetargetReferences walked EntityRef fields only, so a GameObject
+    //  variable pointing at something in the scene was quietly disconnected
+    //  by an ordinary rename in the Hierarchy - the exact failure that
+    //  function exists to prevent, reintroduced by a new type rather than by
+    //  a new bug.
+    //
+    //  AND THE PREFAB HALF MUST NOT MOVE. A prefab path is not an entity
+    //  name. Rewriting it because some entity happened to share its text
+    //  would break the spawn and leave nothing to see.
+    // ======================================================================
+    TestScene      world;
+    const EntityId id = world.Add("Player").Id();
+
+    Json vars;
+    vars["linkedObject"]           = Json::object();
+    vars["linkedObject"]["entity"] = "Player";
+    Attached attached("TestRefs", vars);
+    attached.component.OnAttach();
+
+    const GameObjectRef* link = attached.Field("linkedObject")->AsGameObjectRef();
+    REQUIRE(link != nullptr);
+    REQUIRE(link->IsSceneObject());
+    REQUIRE(link->Target() != nullptr);
+
+    REQUIRE(world.scene.RenameEntity(id, "Hero"));
+
+    CHECK(link->Name() == "Hero");
+    CHECK(link->Target() != nullptr);
+
+    // THE SAVED VALUE TOO, for the reason the EntityRef case gives: moving
+    // the live one alone works perfectly until the level is loaded again.
+    Json out;
+    REQUIRE(attached.component.Serialize(out));
+    CHECK(out["vars"]["linkedObject"]["entity"] == "Hero");
+
+    // And the prefab is exactly where it was.
+    const GameObjectRef* prefab = attached.Field("linkedPrefab")->AsGameObjectRef();
+    REQUIRE(prefab != nullptr);
+    CHECK(prefab->IsPrefab());
+    CHECK(prefab->PrefabPath() == "prefabs/bullet.oprefab");
+}
+
+TEST_CASE("a prefab reference whose path matches a renamed entity is left alone") {
+    // The nastiest version of the case above: an entity whose NAME is the
+    // same text as a prefab's path. Contrived, and the point is that the
+    // rename is decided by which half the reference is holding rather than
+    // by comparing strings and hoping.
+    TestScene      world;
+    const EntityId id = world.Add("prefabs/bullet.oprefab").Id();
+
+    Attached attached("TestRefs");
+    attached.component.OnAttach();
+
+    REQUIRE(world.scene.RenameEntity(id, "Something Else"));
+
+    const GameObjectRef* prefab = attached.Field("linkedPrefab")->AsGameObjectRef();
+    REQUIRE(prefab != nullptr);
+    CHECK(prefab->IsPrefab());
+    CHECK(prefab->PrefabPath() == "prefabs/bullet.oprefab");
 }

@@ -88,6 +88,7 @@
 // ============================================================================
 
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -162,8 +163,8 @@ public:
         // public header has to stay C++20-clean.
         std::string standard;
 
-        // /EHsc, the C runtime switch and the warning level - or -fPIC and
-        // -Wall.
+        // /EHsc, the C runtime switch, the warning level and /Z7 - or -fPIC,
+        // -Wall and -g.
         //
         // THE C RUNTIME SWITCH IS NOT A PREFERENCE. It has to match the one
         // the engine was built with, and which one that is was decided when
@@ -171,6 +172,16 @@ public:
         // level is deliberately modest: this is somebody's game code, and an
         // unused parameter in a half-written script should not produce a wall
         // of output.
+        //
+        // /Z7 IS WHAT MAKES A BREAKPOINT POSSIBLE in somebody's own script,
+        // and it is the one entry here that is about code generation rather
+        // than about reading the source. The argument for its being here
+        // rather than in a list of its own is on AppendParseFlags in the .cpp,
+        // and the argument for /Z7 over /Zi is beside the switch itself in
+        // Settings().
+        //
+        // IT IS NOT, ON ITS OWN, ENOUGH. The link is a separate invocation
+        // and needs /DEBUG; see the link line in WriteBuildScript.
         std::vector<std::string> switches;
 
         // Absolute, forward slashes. Two in a source tree - the engine's
@@ -231,7 +242,7 @@ public:
         std::string forcedInclude;
 
         // The standard and the switches, spelled for the compiler in
-        // question: {"/std:c++20", "/EHsc", "/MDd", "/W3"}.
+        // question: {"/std:c++20", "/EHsc", "/MDd", "/W3", "/Z7"}.
         //
         // WITHOUT the include directories, because that is the part no two
         // consumers spell alike - one /I argument each in a compile database,
@@ -289,9 +300,9 @@ public:
     //
     // Links every script into a single userContent.dll, which is what an
     // exported game gets. A shipped game has no reason to carry one library
-    // per script - it will never recompile one of them - and loading eleven
-    // libraries means eleven import tables and eleven lots of relocation for
-    // no benefit at all.
+    // per script - it will never recompile one of them - and each library is
+    // another import table and another round of relocation, for no benefit
+    // at all.
     //
     // IT IS THE SAME OBJECTS, LINKED DIFFERENTLY. The editor's per-script
     // build and this one compile into the same .build/obj, so exporting right
@@ -404,6 +415,23 @@ public:
     //  the Assets panel does.
     // ======================================================================
     static std::map<std::string, std::string> GatherScriptClasses();
+
+    // ======================================================================
+    //  THE HEADER AN IDE READS, so that another script's bare name is not
+    //  underlined in a window while compiling without complaint in the
+    //  editor.
+    //
+    //  Returns the path it wrote, or an empty path with the reason in
+    //  outError. Written on every successful build, because its contents are
+    //  the scripts' own text and go stale the moment one is edited - and from
+    //  ScriptIde, so that the configuration which names it never points at a
+    //  file that is not there yet.
+    //
+    //  What it contains and why it is not simply the generated unit:
+    //  GenerateScriptScopeHeader in engine/tools/ScriptVars.h.
+    // ======================================================================
+    static std::filesystem::path WriteIdeScopeHeader(std::string& outError);
+    static std::filesystem::path IdeScopeHeaderPath();
 
     // The three phases of a build. See the long note above BeginBuild in the
     // .cpp for which of them may run off the main thread - only Compile may.

@@ -118,6 +118,9 @@
 // ============================================================================
 
 #include <engine/scene/Component.h>
+#include <engine/scene/ComponentAliases.h>
+#include <engine/scene/ComponentRef.h>
+#include <engine/scene/Coroutine.h>
 // Scene.h, because the templates on ScriptBehaviour below walk the scene and
 // the hierarchy, so Scene and Entity both have to be complete here rather
 // than merely named. Nothing Scene.h includes includes this file back.
@@ -132,6 +135,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 namespace eng {
 
@@ -336,11 +340,76 @@ public:
 //  What it does give you is the handful of accessors a script needs, all valid
 //  from OnStart onwards.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+//  DECLARED, NOT INCLUDED. The aliases below name these types but never need
+//  them COMPLETE: `using X = ComponentRef<Y>;` does not instantiate
+//  ComponentRef, so a declaration is enough and this header does not have to
+//  drag in the tilemap, the UI and every collider. A script that actually
+//  DECLARES one gets the complete type from <engine/Engine.h>, which it has
+//  included long before its own first line.
+// ---------------------------------------------------------------------------
+class SpriteAnimationComponent;
+class Rigidbody2DComponent;
+class CameraComponent;
+class TilemapComponent;
+class TilemapColliderComponent;
+class SpinComponent;
+class BoxColliderComponent;
+class CircleColliderComponent;
+class CapsuleColliderComponent;
+class EdgeColliderComponent;
+class PolygonColliderComponent;
+class UIRectComponent;
+class UIImageComponent;
+class UITextComponent;
+class UIButtonComponent;
+class UISliderComponent;
+class PlayerInputComponent;
+
+// Forward-declared rather than included. input/InputActions.h pulls in the
+// whole action-map asset, and this is the scene layer - a function pointer
+// taking an incomplete type by reference needs no more than the name.
+struct ActionEvent;
+
 class ScriptBehaviour {
 public:
-    // Virtual so a script can be deleted through this base pointer. It is the
-    // only virtual function left, and the only one that needs to be.
-    virtual ~ScriptBehaviour() = default;
+    // ======================================================================
+    //  THE ENGINE'S COMPONENTS, UNDER THEIR OWN NAMES, AS REFERENCES.
+    //
+    //  `SpriteComponent renderer;` is a slot you drag an entity onto - the
+    //  same thing `Invisibility invis;` is for a script the game wrote. That
+    //  is the whole of what makes an engine component and a script the same
+    //  thing to write, and scene/ComponentAliases.h argues it at length.
+    //
+    //  THEY ARE MEMBERS BECAUSE THEY HAVE TO BE. A script says
+    //  `using namespace eng;`, so an alias anywhere at namespace scope would
+    //  be a second SpriteComponent in the global namespace and every use of
+    //  the name would be C2872. A member inherited from here hides the
+    //  namespace-scope name outright, and - the part that matters most - it
+    //  does so in the file you are EDITING as well as in the unit the editor
+    //  generates, so your IDE and the compiler agree about what the name is.
+    // ======================================================================
+    ENGINE_SCRIPT_COMPONENT_REFERENCES
+
+    // ======================================================================
+    //  Virtual so a script can be deleted through this base pointer. It is
+    //  the only virtual function left, and the only one that needs to be.
+    //
+    //  AND IT HAS A BODY NOW, WHICH IT DID NOT USED TO. It tells every
+    //  Player Input component that this object is gone, so that a method
+    //  subscribed with input->Subscribe("Fire", this, &Gun::FireGun) stops
+    //  being called the moment the object it belongs to stops existing.
+    //
+    //  THAT IS NOT A TIDINESS: SetScriptName destroys this behaviour and
+    //  builds a new one while the Player Input component on the same entity
+    //  LIVES ON, and so does removing the Script Component. Without this the
+    //  next press would call a method on freed storage.
+    //
+    //  The body is out of line, in ScriptComponent.cpp, which is the only
+    //  reason this is not `= default` - the input header has no business
+    //  being included by every script in the project.
+    // ======================================================================
+    virtual ~ScriptBehaviour();
 
     // ======================================================================
     //  NOT COPYABLE, AND THAT IS NEW.
@@ -462,39 +531,46 @@ public:
     //     if (self == nullptr) { return; }
     //     auto* body = self->Find<eng::Rigidbody2DComponent>();
     template <class T>
-    T* Find() const {
+    typename FindTargetOf<T>::type* Find() const {
+        using Target = typename FindTargetOf<T>::type;
         Entity* self = Owner();
-        return self != nullptr ? self->Find<T>() : nullptr;
+        return self != nullptr ? self->Find<Target>() : static_cast<Target*>(nullptr);
     }
 
     // Unity's GetComponentInChildren / GetComponentInParent. Both include this
     // entity itself, as Unity's do.
     template <class T>
-    T* FindInChildren() const {
+    typename FindTargetOf<T>::type* FindInChildren() const {
+        using Target = typename FindTargetOf<T>::type;
         Entity* self = Owner();
-        return self != nullptr ? self->FindInChildren<T>() : nullptr;
+        return self != nullptr ? self->FindInChildren<Target>()
+                               : static_cast<Target*>(nullptr);
     }
     template <class T>
-    T* FindInParents() const {
+    typename FindTargetOf<T>::type* FindInParents() const {
+        using Target = typename FindTargetOf<T>::type;
         Entity* self = Owner();
-        return self != nullptr ? self->FindInParents<T>() : nullptr;
+        return self != nullptr ? self->FindInParents<Target>()
+                               : static_cast<Target*>(nullptr);
     }
 
     // Unity's AddComponent<T>(). Add always adds another; Require adds one
     // only if there is not one already, which is what the comment "this script
     // needs a rigidbody" usually means.
     template <class T>
-    T* Add() const {
+    typename FindTargetOf<T>::type* Add() const {
+        using Target = typename FindTargetOf<T>::type;
         Entity* self = Owner();
-        return self != nullptr ? self->Add<T>() : nullptr;
+        return self != nullptr ? self->Add<Target>() : static_cast<Target*>(nullptr);
     }
     template <class T>
-    T* Require() const {
+    typename FindTargetOf<T>::type* Require() const {
+        using Target = typename FindTargetOf<T>::type;
         Entity* self = Owner();
         if (self == nullptr) {
             return nullptr;
         }
-        if (T* existing = self->Find<T>(); existing != nullptr) {
+        if (Target* existing = self->Find<Target>(); existing != nullptr) {
             return existing;
         }
         return self->Add<T>();
@@ -514,31 +590,34 @@ public:
     // empty vector and 0 rather than an untouched one, because "cleared first"
     // has to be true however the call turns out.
     template <class T>
-    std::size_t FindAll(std::vector<T*>& into) const {
+    std::size_t FindAll(
+        std::vector<typename FindTargetOf<T>::type*>& into) const {
         Entity* self = Owner();
         if (self == nullptr) {
             into.clear();
             return 0;
         }
-        return self->FindAll<T>(into);
+        return self->FindAll<typename FindTargetOf<T>::type>(into);
     }
     template <class T>
-    std::size_t FindAllInChildren(std::vector<T*>& into) const {
+    std::size_t FindAllInChildren(
+        std::vector<typename FindTargetOf<T>::type*>& into) const {
         Entity* self = Owner();
         if (self == nullptr) {
             into.clear();
             return 0;
         }
-        return self->FindAllInChildren<T>(into);
+        return self->FindAllInChildren<typename FindTargetOf<T>::type>(into);
     }
     template <class T>
-    std::size_t FindAllInParents(std::vector<T*>& into) const {
+    std::size_t FindAllInParents(
+        std::vector<typename FindTargetOf<T>::type*>& into) const {
         Entity* self = Owner();
         if (self == nullptr) {
             into.clear();
             return 0;
         }
-        return self->FindAllInParents<T>(into);
+        return self->FindAllInParents<typename FindTargetOf<T>::type>(into);
     }
 
     // ---- another entity --------------------------------------------------
@@ -581,7 +660,7 @@ public:
         return world != nullptr ? world->FindFirstWith<T>() : nullptr;
     }
     template <class T>
-    T* FindFirstComponent() const {
+    typename FindTargetOf<T>::type* FindFirstComponent() const {
         Scene* world = GetScene();
         return world != nullptr ? world->FindFirstComponent<T>() : nullptr;
     }
@@ -617,6 +696,30 @@ public:
     EntityId Instantiate(const PrefabRef& prefab) const;
     EntityId Instantiate(const PrefabRef& prefab, const SpawnOptions& placement) const;
 
+    // ======================================================================
+    //  AND THE ONE THAT TAKES EITHER KIND.
+    //
+    //  An eng::GameObjectRef - Unity's `public GameObject` - holds a prefab
+    //  OR something already in the scene, decided by what was dragged onto it
+    //  in the Inspector rather than by the type written in the script.
+    //
+    //  A PREFAB IS BUILT FROM ITS FILE. A SCENE OBJECT IS CLONED, which is
+    //  Unity's behaviour for Instantiate(someSceneObject) and the thing that
+    //  makes the two interchangeable here. Handing back the original instead
+    //  would mean a spawner quietly moving the thing it was asked to copy -
+    //  the same object would appear to teleport on the second shot.
+    //
+    //  The clone goes through Scene::DuplicateEntity, so it brings its
+    //  children, its components and its script variables, and is named
+    //  uniquely rather than sharing a name with what it came from.
+    //
+    //  A reference nobody has set does nothing and says so once, exactly as
+    //  the PrefabRef pair above does.
+    // ======================================================================
+    EntityId Instantiate(const GameObjectRef& thing) const;
+    EntityId Instantiate(const GameObjectRef& thing,
+                         const SpawnOptions&  placement) const;
+
     // An empty entity, named uniquely - Unity's `new GameObject("name")`.
     // Goes through Scene::CreateEntityUniquelyNamed, so calling it fifty times
     // with "Spark" gives fifty distinct names rather than fifty things all
@@ -636,7 +739,120 @@ public:
     // kind of thing that reads as a mistake at a call site.
     void DestroySelf() const;
     void Destroy(EntityId id) const;
+
+    // ======================================================================
+    //  SURVIVING A SCENE CHANGE - Unity's DontDestroyOnLoad.
+    //
+    //      void OnStart() { DontDestroyOnLoad(); }
+    //
+    //  This entity, its components, its scripts WITH WHATEVER THEY WERE
+    //  HOLDING, and its children all stay as they are while the scene around
+    //  them is replaced. Not rebuilt from a file on the other side - the same
+    //  objects, the same behaviour instance, the same EntityId. A counter goes
+    //  on counting; a coroutine goes on running.
+    //
+    //  WHAT THIS REPLACES. The engine could not do it, and
+    //  assets/scripts/GameController.cpp carries the workaround it forced: the
+    //  entity died and its state was parked in file-statics for the next
+    //  scene's copy to adopt. That works for three floats and not for anything
+    //  with a position, a child or a coroutine.
+    //
+    //  ==========================================================================
+    //  ONLY A SCENE CHANGE CARRIES IT, which is narrower than it sounds.
+    //  Pressing Stop in the editor destroys it, starting a new scene destroys
+    //  it, and closing the project destroys it. Scene::SetPersistent has the
+    //  whole list and the reason for each.
+    //
+    //  A SINGLETON STILL NEEDS THE USUAL CHECK. Load a scene that has its own
+    //  copy of this manager and there are now two, exactly as in Unity. The
+    //  name goes on meaning the one that survived, so the newcomer can find it
+    //  and stand down:
+    //
+    //      void OnStart() {
+    //          if (FindEntity("Manager") != gameObject) { DestroySelf(); return; }
+    //          DontDestroyOnLoad();
+    //      }
+    //
+    //  CALLING IT TWICE IS HARMLESS.
+    //
+    //  ==========================================================================
+    //  A SCENE CHANGE IS A HARD BOUNDARY FOR QUEUES, which is worth knowing
+    //  because it is not what you would guess. The deferred queue and the
+    //  message queue are both emptied as part of changing scene - see
+    //  DeferredOps::Clear and MessageBus::ClearQueue in Engine::Simulate - so
+    //  a survivor arrives in the new scene with:
+    //
+    //    NO QUEUED DESTROY. Ask to be destroyed and change scene in the same
+    //      frame and the destroy is dropped; the object lives.
+    //    NO RUNNING FUSE. A DestroySelfAfter(5) does not continue counting.
+    //    NO UNDELIVERED MESSAGES, and no collision or trigger EXIT for the
+    //      colliders that have just gone - so the usual "every enter has a
+    //      matching exit" does not hold across a load.
+    //
+    //  Those are properties of the queues rather than of persistence, and
+    //  they were there before this existed. They are written down here
+    //  because a surviving object is the first thing that can notice.
+    // ==========================================================================
+    void DontDestroyOnLoad() const;
+    void DontDestroyOnLoad(EntityId id) const;
+
+    // The other direction, for a manager that should stop surviving - a
+    // tutorial controller that is done, say. Harmless on something that was
+    // never marked.
+    void DestroyOnLoad(EntityId id) const;
     void Destroy(Entity& entity) const;
+
+    // ======================================================================
+    //  COROUTINES - Unity's StartCoroutine. See scene/Coroutine.h.
+    //
+    //      Coroutine Blink() {
+    //          flash->SetTint(Color::Red());
+    //          co_yield WaitForSeconds(0.5f);
+    //          flash->SetTint(Color::White());
+    //      }
+    //      void OnStart() { StartCoroutine(Blink()); }
+    //
+    //  RESUMED ON THE MAIN THREAD, from the same place OnUpdate runs - so a
+    //  coroutine may touch the scene exactly as OnUpdate may, and no more.
+    //  There is no worker thread; Coroutine.h says why there must not be.
+    //
+    //  ONCE PER DRAWN FRAME, in one of TWO passes: the ordinary one inside
+    //  FrameTick, and the end-of-frame one in Engine::PresentFrame that only
+    //  `co_yield WaitForEndOfFrame()` uses. A coroutine belongs to exactly one
+    //  of them at a time, so it is resumed once a frame either way.
+    //
+    //  THE COROUTINE BELONGS TO THIS BEHAVIOUR and cannot outlive it: it is
+    //  destroyed when the entity goes, when the component is removed, when the
+    //  scene is replaced, when play stops, on every undo step and on every
+    //  script rebuild. That is not politeness - a coroutine written as a member
+    //  function holds `this` inside its frame, so an orphaned one is a dangling
+    //  `this` rather than a leak.
+    //
+    //  CONST like every other verb here, and for a reason worth knowing: the
+    //  frames live on the ScriptComponent and not in this object, which is what
+    //  lets them be destroyed in the right order - while the behaviour is still
+    //  whole, rather than from a destructor that has already run.
+    //
+    //  The id is there for StopCoroutine and is ignorable, so
+    //  `StartCoroutine(Blink());` is the ordinary spelling. A behaviour with no
+    //  component yet - the gap between construction and bind - gets
+    //  CoroutineId::None and the frame is freed rather than leaked.
+    // ======================================================================
+    CoroutineId StartCoroutine(Coroutine routine) const;
+
+    // True if it was running. A coroutine that already finished is not an
+    // error to stop: ids are never reused, so this is simply false.
+    bool StopCoroutine(CoroutineId id) const;
+
+    void        StopAllCoroutines() const;
+    std::size_t RunningCoroutineCount() const;
+
+    // Unity's string form, DELETED rather than absent so that
+    // StartCoroutine("Blink") points at this note instead of at a conversion
+    // error. It needs reflection, and this engine has none and can have none:
+    // a `requires` expression can ask whether a NAMED member exists, and no
+    // C++ construct can ask what members a class has. Call the function.
+    CoroutineId StartCoroutine(std::string_view) const = delete;
 
     // Unity's Destroy(obj, t). The delay is GAME time, so it stops while the
     // game is paused, and the thing behaves completely normally until it
@@ -732,6 +948,35 @@ public:
         CreateFn    create = nullptr;
         ScriptHooks hooks;
 
+        // ---- input action handlers -----------------------------------
+        //
+        //  Installed by the generated unit, right after the script's own
+        //  ENGINE_REGISTER_SCRIPT and inside the same namespace - which is
+        //  the one place in the generated file that runs exactly once per
+        //  script and names the class correctly in every build path.
+        //
+        //  HERE AND NOT IN ScriptHooks, which matters: that struct is built
+        //  inside the script DLL and passed across by VALUE, so a field
+        //  added to it is a script-ABI change and needs ENGINE_SCRIPT_ABI
+        //  bumped. An Entry is built on THIS side of the boundary from the
+        //  arguments, so adding to it costs nothing and cannot leave a
+        //  stale DLL passing a short struct.
+        //
+        //  The names are the METHOD names - "OnJump", not "Jump" - and the
+        //  array lives in the script DLL's own static storage, so it is
+        //  dropped with the Entry when the library unloads.
+        const char* const* actionHandlers     = nullptr;
+
+        // WHICH OF THEM CAN ACTUALLY BE CALLED. The scanner is allowed to
+        // guess, so the names above are candidates; this is the compiler's
+        // answer for each - false for a private one, or one whose
+        // parameters no action can fill. Dispatch skips them and the load
+        // report does not claim them.
+        const bool*        actionHandlerBound = nullptr;
+        std::size_t        actionHandlerCount = 0;
+        void (*actionDispatch)(ScriptBehaviour&, std::size_t,
+                               const ActionEvent&) = nullptr;
+
         // Which file this class was written in, straight from __FILE__.
         //
         // It earns its place twice. It lets the same script be registered
@@ -742,6 +987,17 @@ public:
         // pointing at a name that no longer exists.
         std::string sourceFile;
     };
+
+    // How many times a registration has turned out to be a script that was
+    // already registered from the SAME file - which is what happens to every
+    // library but the first when a script class lives in a shared header.
+    //
+    // Only ScriptLibrary::Load has any business with this: it reads the number
+    // either side of a load so that it can tell "this library registered
+    // nothing because it has no ENGINE_REGISTER_SCRIPT" from "this library
+    // registered nothing because somebody else got there first". Those want
+    // very different things said about them.
+    static std::size_t RepeatCount();
 
     static void Register(std::string_view scriptName, CreateFn create,
                          const ScriptHooks& hooks, std::string_view sourceFile);
@@ -761,6 +1017,22 @@ public:
     // the call arrives.
     static bool SetExposer(std::string_view scriptName,
                            void (*expose)(ScriptBehaviour*, ScriptFields&));
+
+    // ---- the action handlers a BUILD STEP found ---------------------
+    //
+    //  The same shape as SetExposer and for the same reason: the editor
+    //  reads the script's source, works out which methods look like input
+    //  handlers, and generates a unit that calls this. Nothing the author
+    //  writes mentions it.
+    //
+    //  False when no script by that name is registered - which is not an
+    //  error worth stopping for, only worth not pretending about.
+    static bool SetActionHandlers(std::string_view scriptName,
+                                  const char* const* methodNames,
+                                  const bool*        bound,
+                                  std::size_t        count,
+                                  void (*dispatch)(ScriptBehaviour&, std::size_t,
+                                                   const ActionEvent&));
 
     static bool         IsRegistered(std::string_view scriptName);
     static const Entry* Find(std::string_view scriptName);
@@ -902,6 +1174,51 @@ public:
     // quiet way to delete everything the component was keeping safe.
     std::size_t ForgetUnusedSavedValues();
 
+    // ======================================================================
+    //  HOW MANY OF AN ARRAY'S ELEMENTS THIS ENTITY USES.
+    //
+    //  THE SCRIPT'S ARRAY IS A FIXED SIZE and this does not change it. A
+    //  `std::string walkAnimations[8]` is eight strings in the behaviour
+    //  object for as long as that object exists, whatever this says - there is
+    //  no reallocating a C++ array from a tool, and ScriptFields.h's own
+    //  static_assert spells out why a growable one is not offered either.
+    //
+    //  WHAT IT IS, THEN: how many rows the Inspector offers, saved with the
+    //  entity because it is a decision about this door and not about the
+    //  Door script. An eight-long array on an entity that uses three of them
+    //  is three rows and a number, instead of eight rows of which five are
+    //  blank - which is the whole of what a length is for here.
+    //
+    //  AND THE ELEMENTS PAST IT ARE STILL THERE, which is the one thing this
+    //  must not be quiet about: the script keeps reading all eight. Shortening
+    //  hides rows, it does not clear them, because a drag from 8 to 1 and back
+    //  would otherwise destroy six values that nothing could return. The
+    //  Inspector names any hidden element that is still set and offers to
+    //  clear them, which is the same decision ForgetUnusedSavedValues leaves
+    //  to somebody rather than taking.
+    //
+    //  DEFAULTS TO THE WHOLE ARRAY and is clamped to it, so a scene file
+    //  holding 99 for an array of 4 shows four rows rather than forty
+    //  nonexistent ones. Returns 0 for a name that is not an array, which is
+    //  the same answer ScriptFields::ArrayLength gives.
+    // ======================================================================
+    std::size_t ArrayLengthUsed(std::string_view arrayName) const;
+
+    // Records it. Clamped to the array's declared length, and a value equal to
+    // that length REMOVES the key rather than writing it - an array nobody has
+    // shortened should leave nothing in the scene file.
+    void SetArrayLengthUsed(std::string_view arrayName, std::size_t length);
+
+    // The scene-file key the length above is stored under - "walkAnimations[]".
+    //
+    // ONE FUNCTION, because three separate things need the spelling: the two
+    // above, and UnusedSavedValues, which has to recognise the key in order
+    // not to report a length as a leftover value and offer to delete it.
+    //
+    // IT CANNOT COLLIDE WITH A VARIABLE. The elements are "name[0]" upwards,
+    // every other field is a C++ identifier, and neither can be "name[]".
+    static std::string ArrayLengthKey(std::string_view arrayName);
+
     // Points every entity reference that named `oldName` at `newName`, and
     // says how many moved. Called by Scene::RenameEntity; see the note there.
     std::size_t RetargetReferences(std::string_view oldName,
@@ -921,8 +1238,15 @@ public:
         return m_behaviour != nullptr && (!m_started || m_hooks.fixedUpdate != nullptr);
     }
     bool NeedsFrameTick() const {
-        return m_behaviour != nullptr && (!m_started || m_hooks.update != nullptr);
+        return m_behaviour != nullptr &&
+               (!m_started || m_hooks.update != nullptr || !m_coroutines.empty());
     }
+
+    // WITHOUT THE COROUTINE TEST ABOVE the feature would appear to work once
+    // and then stop. A script whose only hook is OnStart leaves g_frameTicking
+    // on its first frame - that is what the erase_if after the walk is for -
+    // and a coroutine started in OnStart would never be resumed again.
+    bool HasLiveCoroutines() const { return !m_coroutines.empty(); }
 
     // Called by ScriptSystem only.
     //
@@ -931,6 +1255,17 @@ public:
     // it wants, and gets the right answer for whichever of these it is in.
     void FixedTick();
     void FrameTick();
+
+    // THE SECOND PER-FRAME PASS, after everything has been drawn and just
+    // before the picture is shown. It resumes the coroutines that asked for
+    // WaitForEndOfFrame, and does nothing else whatever.
+    //
+    // NO HOOK, AND NO EnsureStarted. There is no OnEndOfFrame for a script to
+    // write - this exists only so that `co_yield WaitForEndOfFrame()` has
+    // somewhere to land - and a script that has not started by now must not
+    // fire its OnStart after its first frame has already been drawn. Whichever
+    // ordinary tick reaches it first still owns that.
+    void EndOfFrameTick();
     // `pairToken` names WHICH COLLIDER PAIR the event is for; see
     // CollisionSystem::ContactForEvent. It defaults to "none", which falls
     // back to looking the contact up by entity pair - right for a caller that
@@ -967,6 +1302,87 @@ private:
     std::unique_ptr<ScriptBehaviour> m_behaviour;
     ScriptHooks                      m_hooks;
     bool                             m_started = false;
+
+    // ---- running coroutines ---------------------------------------------
+    //
+    // HERE RATHER THAN ON ScriptBehaviour, which would die with the object on
+    // every path for free and is the tempting answer. It is wrong by one step
+    // of destruction order: ~ScriptBehaviour runs AFTER the derived script's
+    // destructor, so a suspended frame's locals would be destroyed with the
+    // script's own members already gone. Unbind() destroys them while the
+    // behaviour is still whole.
+    //
+    // HERE RATHER THAN IN A REGISTRY KEYED BY ENTITY, too. An entity may carry
+    // several ScriptComponents, so an EntityId does not identify a behaviour;
+    // and entity slots are recycled, so a stale key can match a brand new
+    // entity. The component is the thing being destroyed, so it is the key
+    // that needs no generation counter - and nothing has to be told anything,
+    // which is the failure mode this codebase keeps rediscovering.
+    //
+    // Made of addresses inside the compiled script library, exactly like
+    // m_hooks and m_fields, and emptied in the same place for the same reason.
+    struct RunningCoroutine {
+        CoroutineId       id     = CoroutineId::None;
+        Coroutine::Handle handle = {};
+
+        // Marked by StopCoroutine and swept after the walk, never destroyed
+        // in place: a coroutine may stop itself, and the frame being resumed
+        // has to outlive its own resume() call.
+        bool stopRequested = false;
+
+        // ==================================================================
+        //  WHICH RESUME PASS LAST TOUCHED THIS, so that no pass can resume one
+        //  frame twice. Compared against a counter the ScriptSystem bumps at
+        //  the top of each pass; an entry already stamped with the current one
+        //  is stepped over.
+        //
+        //  THE SNAPSHOT ALONE WAS NOT ENOUGH, and the gap is worth spelling
+        //  out. ResumeCoroutines takes the size of THIS component's list
+        //  before walking it, which stops a coroutine that starts another on
+        //  ITSELF from being resumed twice. But StartCoroutine is reachable on
+        //  ANOTHER behaviour - FindScriptIn<T>() hands you one, and the header
+        //  recommends it - and AddCoroutine resumes the new coroutine
+        //  immediately. If that other component has not been walked yet, its
+        //  own snapshot is taken afterwards and includes the brand new entry,
+        //  which is then resumed a second time in the same pass. A
+        //  `while (true) { Draw(); co_yield WaitForEndOfFrame(); }` would run
+        //  twice in one frame, and nothing would report it.
+        //
+        //  Stamped by AddCoroutine as well as by the walk, so a coroutine is
+        //  never resumed again in the pass that created it.
+        // ==================================================================
+        std::uint64_t resumedInPass = 0;
+    };
+    std::vector<RunningCoroutine> m_coroutines;
+
+    // Never reused, so an id that has finished is simply not found - which is
+    // what makes StopCoroutine on a dead id a no-op instead of a wrong hit.
+    std::uint64_t m_nextCoroutineId = 1;
+
+    // WHICH WAITS A RESUME PASS MAY CONTINUE.
+    //
+    // There are two passes in a frame and every coroutine belongs to exactly
+    // one of them: Update runs inside FrameTick and carries nullptr, 0 and the
+    // two timed waits; EndOfFrame runs from Engine::PresentFrame and carries
+    // nothing but WaitForEndOfFrame. Both walk the SAME list and each steps
+    // over what the other owns, which is what makes one `co_yield
+    // WaitForEndOfFrame()` resume exactly once in a frame without anything
+    // being moved between lists to be forgotten in.
+    enum class ResumePhase : unsigned char { Update, EndOfFrame };
+
+    CoroutineId AddCoroutine(Coroutine&& routine);
+    void        ResumeCoroutines(ResumePhase phase);
+    void        DestroyAllCoroutines();
+
+    // Frees the frames that have finished or been stopped. Phase-blind on
+    // purpose: StopCoroutine only MARKS, and whichever pass next sweeps should
+    // free it whatever the entry was waiting for.
+    //
+    // ALSO RUN ON A SWITCHED-OFF ENTITY, where the two ticks return early -
+    // sweeping is bookkeeping and not running the game. Without that, a
+    // coroutine stopped while its entity was off kept its frame, and its
+    // `this`, for as long as the entity stayed off, with nothing reporting it.
+    void SweepFinishedCoroutines();
 
     // Rebuilt on every bind and emptied on every unbind, exactly like
     // m_hooks: both are made of pointers into the compiled script library.
@@ -1021,13 +1437,19 @@ private:
 //  about scripts; scripts know about the reference.
 //
 //  ==========================================================================
-//  THE TYPED FORM NEEDS THE CLASS TO BE NAMEABLE, which most are not.
+//  THE TYPED FORM NEEDS A DECLARATION OF THE CLASS, which most files have not
+//  got.
 //
-//  Every script in assets/scripts sits in an `namespace { }`, so no other file
-//  can mention its type at all - that is what keeps two scripts from colliding
-//  and it is the right default. To point at a script's own members from
-//  another script, that class has to move into a header both files include;
-//  the registry already supports it (see Entry::sourceFile).
+//  Nothing HIDES a script's name any more - they share the global namespace,
+//  and used to each sit in an anonymous `namespace { }`. What Chaser.cpp lacks
+//  is a DECLARATION of a class defined in Bullet.cpp, and C++ needs a complete
+//  type to call anything on one. Two scripts are kept from colliding by the
+//  duplicate-name machinery instead: refused when a script is created or
+//  renamed, reported by the build, and warned about by the registry.
+//
+//  So to point at a script's own members from another script, that class moves
+//  into a header both files include - which is what eng::ScriptRef<T> is for;
+//  see scene/ScriptRef.h. The registry already expects it (Entry::sourceFile).
 //
 //  MOST REFERENCES DO NOT NEED IT. "Which entity, and does it have a Chaser on
 //  it" is answered by a reference constrained to "Chaser" plus a transform or
@@ -1037,30 +1459,81 @@ private:
 // Any script on `entity` that is really a T, or null.
 template <class T>
 T* FindScriptOn(Entity& entity) {
-    for (std::size_t i = 0; i < entity.ComponentCount(); ++i) {
-        Component* component = entity.ComponentAt(i);
-        if (component == nullptr) {
-            continue;
-        }
-        // As TEXT, because the two literals live in engine.dll and in the
-        // compiled scripts and nothing folded them to one address.
-        if (std::string_view(component->TypeName()) != ScriptComponent::kTypeName) {
-            continue;
-        }
-        if (T* found = dynamic_cast<T*>(
-                static_cast<ScriptComponent*>(component)->Behaviour())) {
-            return found;
+    // ======================================================================
+    //  A BARE SCRIPT NAME IS NOT THE CLASS, and until this check existed
+    //  that mistake COMPILED CLEANLY AND RETURNED NULL FOR EVER.
+    //
+    //  `Door` is an alias for eng::ScriptRef<the class> - that is the whole
+    //  point of it, and what makes `Door door;` a slot you drag an entity
+    //  onto. So FindScriptOn<Door> asked to dynamic_cast a ScriptBehaviour*
+    //  to a ScriptRef, which is a cast between unrelated types: well formed,
+    //  never successful. The build exited 0, nothing warned, and the call
+    //  site simply never did anything.
+    //
+    //  IT WAS THE SPELLING THIS ENGINE RECOMMENDED. ScriptRef.h said to
+    //  write it for a script on the same entity, the scripting reference
+    //  said it twice, and the editor's own warning about a pointer member
+    //  said it as well - so reading the documentation and following it got
+    //  you a permanent silent no-op. All four now say ::ScriptType.
+    //
+    //  WHY if constexpr AS WELL: without it the dynamic_cast below is still
+    //  instantiated and adds a second error - C2680, inside this header,
+    //  naming no user file. Discarding the body leaves the message below as
+    //  the only thing the author is told.
+    // ======================================================================
+    static_assert(
+        std::is_base_of_v<ScriptBehaviour, T>,
+        "FindScriptOn<T> and FindScriptIn<T> need the SCRIPT CLASS, and a bare "
+        "script name is not it: `Door` means eng::ScriptRef<Door>, a REFERENCE to "
+        "the script, which is what makes `Door door;` a slot you drag an entity "
+        "onto. Asking for a reference finds nothing and always will. Two ways to "
+        "fix it, and the second is usually better: write "
+        "eng::FindScriptOn<Door::ScriptType>(...) - ScriptRef declares ScriptType "
+        "for exactly this - or declare `Door door;` and call door->Method(), which "
+        "needs no lookup at all and can be re-pointed in the Inspector. For a "
+        "COMPONENT the engine defines, the spelling is Find<eng::TheComponent>() "
+        "instead.");
+
+    if constexpr (std::is_base_of_v<ScriptBehaviour, T>) {
+        for (std::size_t i = 0; i < entity.ComponentCount(); ++i) {
+            Component* component = entity.ComponentAt(i);
+            if (component == nullptr) {
+                continue;
+            }
+            // As TEXT, because the two literals live in engine.dll and in the
+            // compiled scripts and nothing folded them to one address.
+            if (std::string_view(component->TypeName()) != ScriptComponent::kTypeName) {
+                continue;
+            }
+            if (T* found = dynamic_cast<T*>(
+                    static_cast<ScriptComponent*>(component)->Behaviour())) {
+                return found;
+            }
         }
     }
     return nullptr;
 }
 
-// The same, through a reference - which is the spelling a script actually
-// writes: FindScriptOn<Chaser>(ref).
+// The same, through a reference. NOTE THE ::ScriptType - a bare `Chaser` is
+// a reference to the script, not the class, and the static_assert above
+// explains what that used to do silently:
+//
+//     eng::FindScriptOn<Chaser::ScriptType>(ref)
 template <class T>
 T* FindScriptOn(const EntityRef& ref) {
     Entity* entity = ref.Target();
     return entity != nullptr ? FindScriptOn<T>(*entity) : nullptr;
+}
+
+// ---------------------------------------------------------------------------
+//  THE DEFINITION Entity.h DECLARED, which is what lets entity.Find<Chaser>()
+//  work at all. The split is forced: dynamic_cast needs the complete
+//  ScriptBehaviour and Entity.h is included by the header that declares it.
+//  See FindTargetOf in scene/Entity.h for the whole arrangement.
+// ---------------------------------------------------------------------------
+template <class T>
+T* FindScriptOnEntity(Entity& entity) {
+    return FindScriptOn<T>(entity);
 }
 
 // Untyped, by the name the registry knows it under. This is what the editor
@@ -1087,14 +1560,14 @@ ScriptComponent* FindScriptNamedOn(Entity& entity, std::string_view scriptName);
 //                       exists - and enough to send it a message.
 //
 //    FindScriptIn<T>    hands back the script OBJECT, so its own members and
-//                       methods can be called. It needs T to be NAMEABLE from
-//                       the calling file, and most scripts are not: every
-//                       script in assets/scripts sits in an `namespace { }`,
-//                       which is the right default and is what stops two
-//                       scripts colliding. To point at one's members from
-//                       elsewhere, move that class into a header both files
-//                       include. The registry already supports it - see
-//                       Entry::sourceFile.
+//                       methods can be called. It needs a DECLARATION of T in
+//                       the calling file, which most files have not got -
+//                       nothing hides a script's name, but one .cpp has no
+//                       declaration of a class defined in another. To point at
+//                       one's members from elsewhere, move that class into a
+//                       header both files include; eng::ScriptRef<T> is the
+//                       reference that does it, in scene/ScriptRef.h. The
+//                       registry already expects it - see Entry::sourceFile.
 //
 //  BOTH SKIP ANYTHING QUEUED FOR DESTRUCTION, because a scorekeeper that died
 //  this tick is not the scorekeeper.
@@ -1161,6 +1634,13 @@ public:
     // only when the game is actually running - see Engine::Simulate for the
     // gate and why it is the one Unity uses.
     static void FrameUpdate();
+
+    // The end-of-frame half, called by Engine::PresentFrame ONLY and exactly
+    // once per frame, behind the same gate FrameUpdate is behind - decided once
+    // in Simulate and remembered, because the Toolbar's Pause button runs in
+    // between the two. It resumes WaitForEndOfFrame coroutines and nothing
+    // else; scene/Coroutine.h says what that does and does not promise.
+    static void EndOfFrameUpdate();
 
     static void        Register(ScriptComponent& script);
     static void        Unregister(ScriptComponent& script);

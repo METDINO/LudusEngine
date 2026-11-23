@@ -33,6 +33,7 @@ namespace fs = std::filesystem;
 
 constexpr const char* kCppPropertiesFile  = "CppProperties.json";
 constexpr const char* kCompileCommandsFile = "compile_commands.json";
+constexpr const char* kLaunchFile          = ".vscode/launch.json";
 
 // ---------------------------------------------------------------------------
 //  WRITTEN AS TEXT RATHER THAN BUILT WITH NLOHMANN, and for the reason
@@ -336,15 +337,26 @@ bool WriteCppProperties(const fs::path& root,
     }
     text << "      ],\n";
     text << "\n";
-    text << "      // The compiler never sees your .cpp on its own: it sees a generated\n";
-    text << "      // file that includes this first and then includes your script. So a\n";
-    text << "      // script that names no headers at all still compiles, and this is\n";
-    text << "      // what says so.\n";
+    text << "      // TWO FILES YOUR SCRIPT DOES NOT INCLUDE AND IS COMPILED WITH.\n";
     text << "      //\n";
-    text << "      // Absolute, because this is the one entry Visual Studio resolves\n";
-    text << "      // as a path rather than by searching includePath above.\n";
+    text << "      // The compiler never sees your .cpp on its own: it sees a generated\n";
+    text << "      // file that includes the engine first and then includes your\n";
+    text << "      // script. So a script that names no headers at all still compiles,\n";
+    text << "      // and the first entry is what says so.\n";
+    text << "      //\n";
+    text << "      // THE SECOND IS WHY `Door door;` IS NOT UNDERLINED HERE. Your\n";
+    text << "      // editor opens one script at a time, and on its own a script has\n";
+    text << "      // never heard of the others - so another script's bare name would\n";
+    text << "      // look like an unknown type even though it builds. That file\n";
+    text << "      // declares every script in this project; it is written again on\n";
+    text << "      // every build, and it explains itself at the top.\n";
+    text << "      //\n";
+    text << "      // Absolute, because these are the entries Visual Studio resolves\n";
+    text << "      // as paths rather than by searching includePath above.\n";
     text << "      \"forcedInclude\": [\n";
-    text << "        " << Quoted(ForcedIncludePath(settings)) << "\n";
+    text << "        " << Quoted(ForcedIncludePath(settings)) << ",\n";
+    text << "        " << Quoted(ScriptBuild::IdeScopeHeaderPath().generic_string())
+         << "\n";
     text << "      ],\n";
     text << "\n";
     text << "      \"compilerSwitches\": " << Quoted(switches.str()) << "\n";
@@ -419,12 +431,21 @@ void AppendEntry(std::ostream& out, const fs::path& root,
     // /FI, so the name would work - but a database is read by more than one
     // tool and only one of them has to disagree for a script with no includes
     // of its own to lose every name in the engine.
+    // AND THE SCRIPT SCOPE HEADER AFTER IT, in that order, which matters: it
+    // ends by redefining a macro the engine's headers define, so it has to be
+    // read second. It is what makes another script's bare name - `Door door;`
+    // - resolve in a tool that only ever sees one script at a time. See
+    // GenerateScriptScopeHeader in engine/tools/ScriptVars.h.
     const std::string forced = ForcedIncludePath(settings);
+    const std::string scope  = ScriptBuild::IdeScopeHeaderPath().generic_string();
     if (settings.msvc) {
         arguments.push_back("/FI" + forced);
+        arguments.push_back("/FI" + scope);
     } else {
         arguments.push_back("-include");
         arguments.push_back(forced);
+        arguments.push_back("-include");
+        arguments.push_back(scope);
     }
 
     // A HEADER HAS TO BE TYPED EXPLICITLY. Clang reads a .h as C unless told
@@ -475,6 +496,100 @@ bool WriteCompileCommands(const fs::path& root,
     text << "]\n";
 
     return WriteWholeFile(root / kCompileCommandsFile, text.str(), outError);
+}
+
+// ---------------------------------------------------------------------------
+//  .vscode/launch.json - ATTACHING A DEBUGGER TO THE RUNNING EDITOR.
+//
+//  THE OTHER TWO FILES DESCRIBE A PARSE. This one is the only thing in the
+//  project that turns the scripts' debug information into something somebody
+//  can use: the editor compiles every script with /Z7 and links it with
+//  /DEBUG, so a breakpoint in assets/scripts/Anything.cpp will bind - but
+//  only once a debugger is attached to the process that loaded it, and
+//  nothing anywhere said how.
+//
+//  ==========================================================================
+//  TWO CONFIGURATIONS, BECAUSE ONE OF THEM IS NEWER THAN SOME INSTALLS.
+//
+//  "program" on an attach request - naming the executable instead of picking
+//  a process - is recent in the C/C++ extension. An older one ignores the key
+//  and leaves a configuration that attaches to nothing, which is why the
+//  process-picker version is written beside it rather than instead of it.
+//
+//  requireExactSource IS TRUE ON PURPOSE. A script that fails to compile
+//  leaves the LAST GOOD library loaded - that is the whole point of one
+//  library per script - so the code running is not the code on screen. A
+//  debugger that bound to it anyway would show somebody stepping through
+//  lines that are not the ones executing, which is a worse lie than refusing.
+//
+//  ==========================================================================
+//  NOT WRITTEN OVER, which is the one way this differs from its two
+//  neighbours.
+//
+//  Those are generated descriptions nobody edits by hand - absolute paths,
+//  rebuilt whenever anything moves. A launch configuration is a file people
+//  add their own entries to, and quietly replacing it on a menu click would
+//  lose work. If one is there, it is left alone and the summary says so.
+//
+//  AND IT IS THE ONE OF THE THREE WORTH COMMITTING, which follows from the
+//  same difference: there is not an absolute path in it. CppProperties.json
+//  and compile_commands.json name this machine's engine headers and this
+//  machine's toolchain, so a copy from somebody else's checkout is not stale
+//  but WRONG - which is why ScriptIde.h says they are not worth committing
+//  and why .gitignore has both. This one says "attach to editor.exe" and
+//  means the same thing everywhere.
+//
+//  There is nothing for Visual Studio here, and that is not an oversight:
+//  launch.vs.json has no form for attaching to a running process on Windows.
+//  Ctrl+Alt+P once, then Shift+Alt+P - Reattach falls back to matching on the
+//  process name - is the whole of it, and the editor guide says so.
+// ---------------------------------------------------------------------------
+bool WriteLaunchJson(const fs::path& root, bool& outWritten, std::string& outError) {
+    outWritten = false;
+
+    const fs::path path = root / kLaunchFile;
+
+    std::error_code ec;
+    if (fs::exists(path, ec)) {
+        return true;   // somebody's own; see the note above
+    }
+
+    fs::create_directories(path.parent_path(), ec);
+    if (ec) {
+        outError = "could not create " + path.parent_path().generic_string();
+        return false;
+    }
+
+    // STRICT JSON, no comments: this is read by VS Code's own parser, which
+    // does accept them - but the schema is served to people as JSON and a
+    // file that only one editor can read is not worth the explanation. The
+    // explanation is in the editor guide, where it can be longer.
+    std::ostringstream text;
+    text << "{\n";
+    text << "  \"version\": \"0.2.0\",\n";
+    text << "  \"configurations\": [\n";
+    text << "    {\n";
+    text << "      \"name\": \"Attach to the running editor\",\n";
+    text << "      \"type\": \"cppvsdbg\",\n";
+    text << "      \"request\": \"attach\",\n";
+    text << "      \"program\": \"editor.exe\",\n";
+    text << "      \"requireExactSource\": true\n";
+    text << "    },\n";
+    text << "    {\n";
+    text << "      \"name\": \"Attach to the running editor (pick it yourself)\",\n";
+    text << "      \"type\": \"cppvsdbg\",\n";
+    text << "      \"request\": \"attach\",\n";
+    text << "      \"processId\": \"${command:pickProcess}\",\n";
+    text << "      \"requireExactSource\": true\n";
+    text << "    }\n";
+    text << "  ]\n";
+    text << "}\n";
+
+    if (!WriteWholeFile(path, text.str(), outError)) {
+        return false;
+    }
+    outWritten = true;
+    return true;
 }
 
 } // namespace
@@ -532,6 +647,17 @@ bool WriteIdeFiles(std::string& outSummary, std::string& outError) {
 
     const fs::path root(projectRoot);
 
+    // ---- THE SCOPE HEADER FIRST, because both files below name it --------
+    //
+    // A build writes it too, and that is the copy that stays current - but
+    // this may well run before anything has ever been built, and a
+    // forcedInclude pointing at a file that does not exist is an error every
+    // IDE reports against every script. Written here, the configuration is
+    // never dead on arrival.
+    if (ScriptBuild::WriteIdeScopeHeader(outError).empty()) {
+        return false;
+    }
+
     if (!WriteCppProperties(root, settings, outError)) {
         return false;
     }
@@ -542,9 +668,23 @@ bool WriteIdeFiles(std::string& outSummary, std::string& outError) {
         return false;
     }
 
+    // NOT FATAL IF IT CANNOT BE WRITTEN, unlike the two above. Those are what
+    // the request was for; this one is a convenience for one editor, and a
+    // project folder that will not take a .vscode directory should not cost
+    // somebody the IntelliSense configuration they asked for.
+    bool        wroteLaunch = false;
+    std::string launchError;
+    if (!WriteLaunchJson(root, wroteLaunch, launchError)) {
+        ENGINE_LOG_WARN(eng::Channels::kEditor, "{} was not written: {}", kLaunchFile,
+                        launchError);
+    }
+
     std::ostringstream summary;
     summary << "wrote " << kCppPropertiesFile << " and " << kCompileCommandsFile << " ("
             << described << " script" << (described == 1 ? "" : "s") << ")";
+    if (wroteLaunch) {
+        summary << " and " << kLaunchFile;
+    }
     outSummary = summary.str();
 
     ENGINE_LOG_INFO(eng::Channels::kEditor,
@@ -552,6 +692,16 @@ bool WriteIdeFiles(std::string& outSummary, std::string& outError) {
                     "and {} is for clangd and anything built on it",
                     outSummary, root.generic_string(), kCppPropertiesFile,
                     kCompileCommandsFile);
+
+    if (wroteLaunch) {
+        ENGINE_LOG_INFO(eng::Channels::kEditor,
+                        "{} attaches VS Code to this editor - scripts are compiled "
+                        "with debug information, so a breakpoint in one will bind",
+                        kLaunchFile);
+    } else if (launchError.empty()) {
+        ENGINE_LOG_INFO(eng::Channels::kEditor,
+                        "{} was already there and has been left alone", kLaunchFile);
+    }
     return true;
 }
 

@@ -196,6 +196,33 @@ the program dies on the first allocation that crosses the heap boundary. The
 check is a comparison rather than a date, so going *back* to an older engine
 rebuilds too.
 
+### How much rebuilds when you edit one script
+
+Usually **one file and one library**. Each script compiles into a translation
+unit of its own, and that unit carries its own class plus the classes it
+actually *resolves* — the ones it reaches through with `->`, calls `.Get()` on,
+or tests with `if (ref)`. Most scripts resolve none of the others, so most
+edits cost a second or two.
+
+Three cases cost more, and all three are visible in the Console line that says
+how many files are compiling:
+
+| what you edited | what rebuilds |
+| --- | --- |
+| a script nothing else reaches into | that one |
+| one of a pair that reach into each other | both |
+| a script with code **outside** its class — a free function, an `enum`, a constant | every script |
+
+The last one is the one to know about. Anything at file scope is reachable
+from every other script without an include, so the build keeps that script in
+every unit; it cannot tell who might be calling it. Putting a shared helper in
+a `.cpp` of its own instead — which is compiled once and linked into every
+script library — keeps it out of everybody's unit and off everybody's rebuild.
+
+**Holding a reference is free.** `Door door;`, `door.IsSet()`, setting it,
+clearing it and having it drawn in the Inspector all work on a name, so they
+create no dependency at all. Only resolving one does.
+
 ### "the compiled scripts were built by ..., but this is ..."
 
 If you see that line, the scripts in `.build/` were compiled for a different
@@ -350,9 +377,8 @@ The menu item's tooltip tells you how many steps are left.
 +---------------------------------------------------------------+
 ```
 
-The **Tile Palette** is not in the picture because it arrives floating the first
-time you run a build that has it - drag it onto the Inspector or the Assets row
-and it stays there.
+The **Input Actions** window is not in the picture because it starts closed -
+the Assets panel opens it when you double-click a `.oinput`.
 
 Every panel can be dragged, tabbed and resized. The arrangement is remembered
 in a file called `imgui.ini`, written into whichever folder you started the
@@ -428,7 +454,35 @@ Everything on the selected entity, editable. The transform's position and
 rotation, the sprite's image and colour, a collider's size and layers, a
 script's binding.
 
+Every row is **name on the left, value on the right**, in one column that does
+not move — the same shape Unity's Inspector and Unreal's Details panel use,
+and for the same reason: a name you read at a fixed place is a list, and a name
+you read at wherever the last drag box happened to end is a paragraph. The
+column narrows with the panel, so a docked Inspector squeezed to a third of
+the window still shows usable values.
+
 Use the **+ ComponentName** buttons at the bottom to add a component.
+
+### Picking something up does not select it
+
+**A click selects on the release, not on the press**, in the Hierarchy and in
+the Assets panel both. That sounds like a detail and it is what makes dragging
+*into* the Inspector work at all: the Inspector draws whatever is selected, so
+selecting on the press that starts a drag swapped the panel out from under the
+drop — taking the slot being aimed at with it.
+
+Two things follow:
+
+- **Dragging an entity from the Hierarchy onto a script's reference** fills it
+  in. The Hierarchy's selection and the Inspector stay where they were for the
+  whole gesture.
+- **Dragging an asset from the Assets panel onto a variable** no longer throws
+  the Inspector back to the top on the way, and no longer leaves you looking at
+  the file you just dropped instead of the entity you dropped it on.
+
+Dragging a row that **is** part of a multi-selection still carries the whole
+selection, which is what makes bulk reparenting work. Dragging one that is not
+carries that row alone and leaves the selection alone.
 
 ### Pointing a component at an image
 
@@ -458,8 +512,8 @@ explained — *"that is a whole image, not a part of one"* — rather than refus
 because a refused drop leaves you holding the thing you meant with no idea why
 nothing happened.
 
-The **Tile Palette**'s art field is deliberately *not* one of these slots: it
-is a field of a `.otile` file rather than a reference, and the panel's whole
+The tile editor's art field is deliberately *not* one of these slots: it is a
+field of a `.otile` file rather than a reference, and that editor's whole
 design is that a wrong path turns red as you type it. It takes a drop too, and
 keeps the text box.
 
@@ -688,7 +742,15 @@ frame-by-frame animation viewer.
 
 A non-looping animation **holds its last frame** when it finishes. Nothing is
 destroyed and nothing is reported - that is what "played once" means - and a
-script can ask `IsFinished()` to act on it.
+script can ask `IsFinished()` to act on it. That is usually the point: a door
+whose opening animation has finished stays open because the last frame is still
+on screen, with no script involved.
+
+**`Pause()` holds the frame too; `Stop()` is the one that hands the sprite its
+own image back.** If an animated entity should show a picture of your choosing
+when it is not animating, set that picture on the SpriteComponent and have the
+script call `Stop()` - see "Which picture is on screen when nothing is playing"
+in the scripting reference.
 
 Every copy of an entity starts its animation together, so forty enemies loaded
 from one scene file animate in lockstep. There is no per-entity start offset
@@ -732,6 +794,33 @@ The arrow appears the moment you press Slice - you do not have to press Refresh
 - and a sheet you have opened stays open while you work, including across
 navigating away and back.
 
+### Renaming and moving take the references with them
+
+Rename a file or drag it into another folder and **everything that pointed at
+it is updated to point at the new name** - every scene, prefab, tile, input
+asset and `build.json` under the project, plus the scene you have open,
+including its unsaved changes. The status line says how many references moved:
+*"renamed to tree.otile - 7 references in 2 files, and the open scene updated"*,
+or *"nothing referred to it"*.
+
+This matters more for some files than others, because **a broken reference does
+not announce itself**. A tilemap whose palette entry will not load keeps its
+cells - cells are numbers - and simply draws nothing where that tile was, with
+its components gone too. You get a level with holes in it some time later,
+with nothing connecting it to a rename.
+
+It matches by the **path itself**, not by a list of known fields. A script
+variable holding a prefab, a tile's sheet, a component nobody has written yet:
+they are all just the path, written down somewhere, and a list of fields is a
+thing to forget. Moving a *folder* takes everything inside it, and renaming a
+sheet takes its sliced frames (`hero.png#walk_1`) along too.
+
+Two things it does not do. A file that is not valid JSON is skipped rather than
+rewritten, and said so in the Console - a rename is not the moment to start
+refusing to proceed over a half-typed file. And **renaming a script only
+renames the file**: the class inside keeps its name, and the class is what
+scenes refer to. The dialog says so while you are still deciding.
+
 **A frame is not a file, and the panel is honest about that.** Rename and Delete
 are not offered on one, by key or by menu, because there is nothing on disk to
 rename: a frame's name and rectangle are edited in the Inspector's Frames list,
@@ -743,6 +832,56 @@ rather than a picture, with the reason in its tooltip. So does an animation
 whose frames have all been renamed away. That matters more than it sounds: the
 alternative is a tile that looks like a real frame while the same frame refuses
 to load the moment it is dropped on something.
+
+---
+
+## Input Actions
+
+**View → Input Actions**, or double-click a `.oinput` in the Assets panel.
+
+Three panes, left to right: the **action maps** in the file, the **actions** in
+the selected map with their bindings under them, and the **properties** of
+whatever is selected. `+` on each adds at that level.
+
+**Press `+ New`** — in this window or `+ Input` in the Assets panel — to make
+one. It is not empty: a new file starts bound to the same controls
+`config/engine.json` already binds, so it is playable the moment it exists. It
+refuses to overwrite a file that is already there.
+
+A file holds **several maps and one is current at a time**, so `Escape` can
+mean *Pause* while playing and *Cancel* while the menu is up. A map *replaces*
+rather than layering - unlike an input context - so while one is current,
+nothing in any other map is consulted at all.
+
+Under each action the window shows **the method it will call**. That is worth
+reading before you write the handler: the name drops punctuation and
+upper-cases only the first letter, so an action called `move camera` calls
+`OnMovecamera`, not `OnMoveCamera`.
+
+To use the file, put a **Player Input** component on an entity, point its
+*Actions* field at it, and pick a *Default map*. Scripts on that entity then
+answer actions by declaring public methods - see **Being told instead of
+asking** in [scripting-reference.md](scripting-reference.md).
+
+Its **Behaviour** dropdown decides *who* those methods are looked for on. The
+three are **exclusive** - exactly one is in force, and the other two are not
+running alongside it:
+
+| Behaviour | Who hears an action |
+| --- | --- |
+| `SendMessages` | the scripts on **that entity**. The default, and Unity's. |
+| `BroadcastMessages` | that entity **and everything under it** - for a rig whose legs and gun are separate objects. |
+| `Callbacks` | **nothing automatic**; only code that asked for events with `Subscribe()`. |
+
+This is Unity's *Behavior* dropdown less its fourth option. *Invoke Unity
+Events* picks a method per action from a dropdown in the Inspector, which needs
+run-time reflection over method names that this engine has nowhere to get - so
+it is absent rather than present and quietly doing nothing.
+
+
+It edits a copy and saves through the file, so a half-typed rename cannot
+reach a running scene. **Save** is greyed out until something changes, and
+**Revert** throws the changes away.
 
 ---
 
@@ -784,6 +923,145 @@ size of a simulation step - see `engine/include/engine/core/GameClock.h`.
 When you press Play, the Game view takes the keyboard and shows a green border
 to say so. Clicking any other panel gives it back, so you can keep using the
 editor while the game runs.
+
+**When you Stop, the keyboard goes back to the Scene view.** The next thing
+after a playtest is almost always to change the level and play again, and
+having to click a panel first to get there broke that cycle every single time.
+It happens whichever way the playtest ended — the Stop button, Ctrl+P, or the
+automatic stop when a script is rebuilt.
+
+### What shape the game renders at
+
+The dropdown beside the camera controls says what the Game view renders at.
+It defaults to **Free Aspect**, which is what the editor always did: the render
+follows the panel, so dragging the panel wider shows **more of the level**.
+That is convenient while building and it is the reason the other options
+exist — every judgement about framing, about what is just off-screen, about
+where the interface sits, is otherwise being made against a window size no
+player will have.
+
+| | |
+| --- | --- |
+| **Free Aspect** | the render follows the panel |
+| **An aspect**, 16:9 and friends | the shape is pinned, the size still follows the panel. How much world is visible depends on the panel; its proportions do not |
+| **A resolution**, 1920 x 1080 and friends | exactly that many pixels, whatever the panel is, scaled to fit. The only one that answers "what will a player actually see" |
+
+Type a ratio like `16:9` or a size like `1366x768` into the box at the bottom
+of the dropdown to **add your own**; the separator is how it knows which you
+meant. Custom entries get an **x** to remove them, and are remembered per
+project.
+
+**This dropdown is the game's output, not a preview.** Choosing from it writes
+`presentation.mode` into `config/engine.json` — the file the engine reads at
+start-up and the export packs into the built game — so the shape you pin here
+is the shape that ships. It used to be remembered in the editor's own session
+file, which is why pinning 16:9, exporting, and finding the game stretching to
+fill whatever window it opened in was not a bug in the export: the setting had
+simply never left the editor.
+
+**The scale slider is a separate number from the resolution**, and that is
+deliberate: scaling the render would change what the camera sees, which is the
+thing the dropdown exists to pin down. So it only changes how big the finished
+picture is **drawn**. **Fit** is as large as the panel allows and is the
+default; **1.00x** is one render pixel per screen pixel, which is the only
+honest way to look at pixel art — a 1920x1080 target in a small panel is then
+mostly off the edge, on purpose.
+
+Whatever space is left over is filled with **black**, because that is what a
+player sees. Grey bars would make the framing look as though it carried on
+past the edge of the picture.
+
+**The slider is also the one control here that stays in your session**,
+rather than in the project. How large the preview is drawn on your monitor
+is nobody else's business and it must not change what ships — which is the
+same reason the shape itself goes the other way.
+
+#### Zoom, or how much world is in shot
+
+Pinning the aspect ratio fixes the **shape** of what a player sees. It does not
+fix **how much** they see — with a zoom, the viewport decides how much world
+fits, so a player at 2560x1440 still saw further than one at 1280x720, up and
+down as well as sideways.
+
+The little button beside the camera's number switches between the two:
+
+| | |
+| --- | --- |
+| **a zoom**, `1.00x` | how many screen pixels one world unit covers. A bigger window shows **more world**. Right for the Scene view, where dragging a panel wider should reveal more of the level |
+| **a height**, `360 tall` | how many world units are visible top to bottom, **whatever the pixel size**. A bigger window draws the same slice larger. The width follows the aspect ratio |
+
+**Frame by height for anything you intend to ship.** It is the only one that
+makes "what I framed here is what a player sees" true. A 21:9 player then sees
+further sideways and no further up, which is the conventional bargain and the
+one every ultrawide player expects — it is what Unity's orthographic camera
+does, spelled as a full height rather than Unity's half-height
+`orthographicSize` because this engine's world is in pixels and "720 units
+tall" is the number you actually mean.
+
+Switching **keeps the shot**: the number it fills in is the one that means the
+same framing at the current size. And a camera on an entity has the same
+choice in its Inspector, since that is the camera a scene travels with.
+
+**Nothing already built is affected.** A camera is framed by zoom unless
+something says otherwise, every scene written before this existed says only a
+zoom, and those read exactly as they always did. A scene file carries one key
+or the other — `"zoom": 2.5` or `"frameHeight": 360` — never both, and
+saving removes the one that no longer applies so a stale number cannot sit
+there looking editable.
+
+#### And in the shipped game
+
+The dropdown writes it here, and you can write it by hand as well:
+
+```json
+"presentation": { "mode": "16:9" }
+```
+
+`"free"`, a ratio, or a size — the same spellings the dropdown takes, read by
+the same code, so a value the editor accepts is a value the game accepts. The
+game is rendered at that shape, centred in the window, with black in whatever
+is left over. **Full screen still works**: with
+`"window": { "fullscreen": true }` the window takes the whole display and the
+bars go where the display is the wrong shape, rather than the game stretching
+or showing more world than it was designed for.
+
+#### Locking the window
+
+Beside the dropdown, **Resizable** decides whether the built game's window can
+be dragged to any size at all:
+
+```json
+"window": { "width": 1280, "height": 720, "resizable": false }
+```
+
+Letterboxing means a resizable window is no longer *wrong* — a pinned shape
+stays correctly pinned at any size — so this is about style rather than
+correctness. But a 480x270 pixel game presented at exactly 3x has one right
+answer and a hundred wrong ones, and leaving a player to find it by dragging is
+not a decision worth delegating.
+
+**The editor's own window is never affected**, whatever a project says. The
+editor hosts the same engine, so a project that shipped full screen at a locked
+size would otherwise open the *editor* full screen at a locked size, with no
+way back but hand-editing the file.
+
+Two things to know:
+
+- **The window size and the render size are separate keys**, and nothing makes
+  them agree. A 720p render in a locked 1280x800 window is black bars for ever.
+  If you pin a resolution, set `window.width` and `window.height` to match it
+  or to a whole multiple of it.
+- **A size the display cannot give is reported, not silently shrunk.** The
+  window is created resizable and locked a moment later — which is SDL's own
+  advice for getting a specific size — and if what comes back is smaller than
+  what was asked for, the log says so rather than leaving you to wonder why the
+  game is not the size the file says.
+
+Both of these settings are **edited in place**. `config/engine.json` holds
+every key binding in the project and a note against most of its sections
+explaining what the setting is for, so the editor splices the one value it is
+changing into the text and leaves every other byte where it was. The diff is
+one line, which is the only kind of diff anybody reads.
 
 **Play is greyed out while the scripts are compiling**, and hovering it says
 so. A build unloads the script libraries for as long as it runs, so a game
@@ -997,9 +1275,55 @@ Every one has:
 | **Enabled** | off, it takes part in nothing - no events, no pushing, invisible to queries. This is how a hitbox is live for three frames of an attack |
 | **Trigger** | reports overlaps, pushes nothing |
 | **Offset** | shifts the shape off the entity's origin, so a character's feet can be the part that collides |
+| **Scale** | how big it is, as a fraction of the sprite on the entity - 1 is the sprite, 0.5 is half of it. The row underneath shows what that works out to in pixels, and what the 1 is being measured against |
+| **Edit shape** | puts yellow handles on the collider in the Scene view, for dragging it into place by hand |
 | **Friction / Bounciness** | 0 friction is ice; 0 bounciness is a beanbag and 1 a superball |
 | **Density** | only used when a rigidbody has Auto mass ticked |
 | **Layer / Collides with** | what it is, and what it wants to hear about |
+
+#### Scale, not pixels
+
+A collider has no width in pixels. It has a **scale**, and 1 means the size of
+the sprite it shares an entity with - so `0.5, 1` is half as wide and full
+height, and the panel prints the pixels that works out to underneath. On an
+entity with no sprite, 1 is one world unit instead: 32 pixels, from
+`units.pixelsPerUnit` in `config/engine.json`.
+
+This is why resizing a sprite moves its collider with it, and why a collider
+set up against one piece of art still fits when the art is redrawn larger.
+
+A **Circle** has no scale row of its own - it uses the same one, taking the
+longer of the two axes as its diameter, and prints the radius that produced.
+There is no ellipse test in this engine, so a circle cannot honour a
+non-square scale; use a **Capsule** when that is what you wanted.
+
+A **Polygon's** and an **Edge's** points are fractions too: `-0.5` is the left
+edge of the scaled box and `0.5` is the right. Changing the scale resizes the
+whole outline at once instead of every point needing to be retyped together.
+
+#### Edit shape: dragging a collider in the Scene view
+
+Press **Edit shape** on a collider and yellow handles appear on it in the Scene
+view. Drag them:
+
+| | |
+| --- | --- |
+| **Box** | one handle per side. Each moves that side and pins the opposite one, so you can fit a collider to a character's feet without alternating between two fields |
+| **Circle** | one handle, because a circle has one number |
+| **Capsule** | two, one per axis, both resizing about the centre |
+| **Polygon** and **Edge** | one handle per point |
+
+It is a mode you turn on rather than something that happens whenever a
+collider is selected, and that is deliberate: handles sit on top of the move
+gizmo and on top of the entity itself, so always-on handles would make every
+click near a selected object a question of which thing you meant. While they
+are on they take the left button, and the move gizmo stands down - the right
+drag still pans. Press the button again, now reading **Done editing shape**, to
+put them away.
+
+The whole drag is **one undo step**, not one per frame, and adding or removing
+a point is still the Inspector's job: the handles move points, they do not
+create them.
 
 A **Polygon** collider whose outline is dented says so in red: it collides as
 the convex hull of those points rather than as drawn, so the shape on screen
@@ -1050,22 +1374,31 @@ to work out why a collision is not firing.
 
 ---
 
-## Tile Palette
+## Tilemaps
 
 A tilemap is a grid of tiles that work out what they look like from the tiles
 around them: paint a line of stone and the ends round themselves off, paint a
 block and the middle fills in. The reasoning is in
 [the README](../README.md#tilemaps); this is how to use it.
 
-### Two kinds of tile
+**The palette belongs to the map.** Select a tilemap and its own list of
+materials is in the Inspector, under **Tile Palette** — along with the tools,
+the brush and the statistics. There is no Tile Palette window any more; there
+used to be one, and it showed every `.otile` in the project to whichever map it
+had guessed you meant, which is two problems at once. A base layer, a detail
+layer and a collision layer are three tilemaps wanting three different handfuls
+of tiles, and one global grid cannot know which handful belongs to which.
 
-There are two, and the one you want depends on whether the art should **join up
-with itself**:
+### Two kinds of tile, and no art at all
+
+There are two kinds of art, and the one you want depends on whether it should
+**join up with itself**:
 
 | Kind      | What it is                                      | When |
 | --------- | ----------------------------------------------- | ---- |
 | **Sheet** | Five bands, assembled from four quarters chosen by the neighbours | ground, water, walls — anything that forms a *surface* |
 | **Image** | One picture, drawn whole. Every cell identical.  | a crate, a bush, a sign, a single frame of a spritesheet |
+| **None**  | Nothing is drawn. The cell is still a cell.      | an invisible wall, a trigger, a spawn marker, a tile that is only its components |
 
 A sheet is the clever one: paint a line of it and the ends round themselves off.
 An image is the plain one, and plain is right far more often than it sounds —
@@ -1078,8 +1411,21 @@ nothing is copied out to a file of its own. That is the quickest way to get a
 pile of scenery tiles out of one atlas.
 
 The `.otile` says which kind it is **by which key it uses** — `"sheet"` or
-`"image"`. There is no separate setting to contradict it, naming both is
-refused, and naming neither tells you what the difference is.
+`"image"`. There is no separate setting to contradict it, and naming both is
+refused: they are the two kinds of art, not two settings, so a file naming both
+has not decided.
+
+**Naming neither is allowed.** A tile with nothing to draw is still a material:
+it fills a cell, it is its own thing to its neighbours, and it sits in a map's
+palette like any other. An **invisible wall** is one of these with
+`"collision": "Grid"` — which a connector can never be, because a connector is
+forced non-solid. So is a trigger, a spawn marker, or a tile whose entire job is
+the components on it.
+
+The editor gives an art-less tile a tint so that you can still see and place it:
+magenta for a connector, teal for everything else. A key that is *there and
+empty* (— `"sheet": ""`) is refused, because that is a deleted path rather
+than a decision.
 
 ### Making a tile
 
@@ -1149,20 +1495,21 @@ file: if "outer corner" and "fill" are pointing at bits of a character, choose
 
 ### Editing a tile
 
-Double-click a `.otile` in the Assets panel — or choose it in the palette and
-open **Edit tile**. Everything is a widget: collision, frame mode, animation
-speeds, what it joins up with, the editor tint.
+Select a `.otile` in the Assets panel — double-clicking one does it too — and
+the **Inspector** shows it. Everything is a widget: collision, frame mode,
+animation speeds, what it joins up with, the editor tint, and the components it
+carries. A tile in a map's palette has **Edit this tile** in its right-click
+menu, which is the same thing from the other direction.
 
 Two things worth knowing:
 
 **It edits the file, not a copy of it.** The widgets change keys in the `.otile`
 as it was read, and saving writes that back out — so `_comment` lines and
-anything else the panel does not know about survive. Keys come out in
+anything else the editor does not know about survive. Keys come out in
 alphabetical order, the same as a saved scene.
 
-**The preview is of your unsaved edits.** The panel re-reads its own buffer
-every frame, so a wrong sheet path turns red as you type it rather than after
-you save.
+**The preview is of your unsaved edits.** The buffer is re-read every frame, so
+a wrong sheet path turns red as you type it rather than after you save.
 
 **Art** at the top switches between the two kinds. The path moves across with
 it, and any `tileSize` or `frames` already in the file are dropped — a size
@@ -1176,8 +1523,8 @@ them to see which band each quarter came from. For an animated sheet, the
 **Preview frame** slider picks the column.
 
 An image tile has neither of those: one picture has no bands to be in the wrong
-order and no shapes to vary, so the panel shows the picture and says so rather
-than greying out a row of controls that could never mean anything.
+order and no shapes to vary, so the Inspector shows the picture and says so
+rather than greying out a row of controls that could never mean anything.
 
 Saving re-reads the tile in place, so every map already using it updates — and
 their colliders rebuild, because changing `collision` changes which cells are
@@ -1185,11 +1532,24 @@ solid without any cell having changed.
 
 ### Painting
 
-1. Open **Tile Palette** (it is in the **View** menu if you closed it).
-2. If the scene has no tilemap, press **New Tilemap entity**. That gives you a
-   `TilemapComponent` and a `TilemapColliderComponent` on one entity.
-3. Click a tile in the grid. The tool switches to **Paint** automatically.
-4. Paint in the Scene view.
+1. **Select the tilemap.** Its palette is in the Inspector; nothing else can be
+   painted, which is what stops a stroke landing in the wrong layer.
+2. If the scene has no tilemap, add one from the **Object** menu — that gives
+   you a `TilemapComponent` and a `TilemapColliderComponent` on one entity.
+3. Press **Add tile...** and choose a `.otile`. That is the only way a material
+   enters a map, and it is what keeps the list short.
+4. Click a tile in the grid. The tool switches to **Paint** automatically.
+5. Paint in the Scene view.
+
+**A brush can only paint what the map already has.** Adding a tile is a
+deliberate act, so a map's palette is the set somebody chose rather than
+everything that has ever been dragged across it. Painting used to add silently,
+which is how a detail layer ended up listing every material in the game.
+
+**Taking one out** is on the tile's right-click menu. An entry nothing uses goes
+straight away; one that is painted says how many cells it is about to erase and
+asks first. Either way the entries after it are renumbered, along with every
+cell that named one — a cell stores a *position* in the list, not a path.
 
 | Tool          | What it does                                               |
 | ------------- | ---------------------------------------------------------- |
@@ -1212,8 +1572,8 @@ Erase is still the quicker fix for a single wrong cell.
 
 ### Why nothing appears
 
-The Tile Palette reports `N cell(s) drawn, M skipped` for the last frame, and
-the two add up to every cell in the scene's maps. So:
+The Inspector reports `N cell(s) drawn, M skipped` for the last frame, and the
+two add up to every cell in the scene's maps. So:
 
 - **drawn 0, skipped many** - the camera is not looking at the map.
 - **drawn 0, skipped 0** - nothing is painted, or the map's `layer` puts it
@@ -1236,6 +1596,78 @@ tiles** in the Inspector. Painting rebuilds the collider by itself, but
 changing a tile from decoration to solid changes which cells are solid without
 any cell having changed, so nothing would otherwise notice.
 
+### What a tile becomes when you paint it
+
+A tile is not only a picture. The **Components** section of its Inspector gives
+it the same components an entity can have, and every cell painted with it gets
+them:
+
+```json
+"components": [
+  { "type": "BoxColliderComponent",
+    "size": [32, 8], "offset": [0, -12], "trigger": true, "layer": "Hazard" }
+]
+```
+
+That is the difference between *solid* and *a spike*. A grid of identical
+squares can describe a wall; it cannot describe a hazard that hurts, a ladder
+that is climbable, or a vent that pushes. Those are properties of the material,
+and this is where a material says them. `assets/tiles/hazard.otile` is a worked
+example — no art, and a trigger shorter than its cell so that walking past the
+base of a spike is safe.
+
+**Add component...** offers everything the engine and your own code have
+registered, minus the three that cannot mean anything on a tile (a transform —
+the *cell* decides where it sits — a tilemap, and a tilemap collider). The
+fields are the Inspector's own, so a tile's box collider is edited by exactly
+the same widgets as an entity's.
+
+**The properties belong to the tile, not to the placement.** Every cell painted
+with a spike is the same spike, the way every instance of a prefab is the same
+prefab until you override one. Two spikes that do different damage are two
+`.otile` files. A cell is one small number with nowhere to hang a difference,
+and that is what keeps a hundred-thousand-cell map a hundred thousand numbers.
+
+**In a cell**, at the bottom of the Inspector, draws exactly what you have
+configured: the art (or the editor tint), the cell's edge, the blue square a
+`"collision": "Grid"` tile fills, and every collider component where it will
+actually sit — green for a solid one, amber for a trigger. Typing an offset as
+a pair of numbers is unreadable; this is how you get a hitbox right without
+playing the game after every nudge.
+
+**A collider on a tile is a fraction of the CELL**, not of the tile's artwork.
+A tile object has no sprite — the map draws the art itself, in bulk, which is
+why a hundred-thousand-cell map costs nothing to draw — so the cell is what
+takes the sprite's usual place: a box at scale `1, 0.5` is the full width of
+the cell and half its height, on a 16-pixel map and a 64-pixel one alike.
+
+**The art's pixel size is a different number.** A 16-pixel autotile sheet
+painted on a 32-pixel map is stretched to fill the cell, exactly as it is
+stretched to fill this preview, and the legend names both so the two cannot be
+confused: *"one cell at 32px (one world unit) — the art is 16px, stretched 2x
+to fill it"*. A `.otile` does not know which map it will be painted on, so the
+preview assumes one world unit; the size it draws is right whatever the map's
+`cellSize` turns out to be, because the collider is the same fraction of the
+cell either way.
+
+#### What it costs
+
+A tile with no components costs **nothing**. One with any costs **one entity per
+painted cell**, created when the game runs and never written into the scene file
+— the map's cells and the `.otile` already say everything about them, so
+editing the tile reaches every cell of it.
+
+So: keep components for the sparse interesting things, and leave the ground
+alone. Solid ground should say `"collision": "Grid"` and carry no collider at
+all, because that path merges whole regions into a handful of boxes while a
+collider component is one box per cell. The two are for different jobs.
+
+They exist **while the game is running**, which is why you will not see them in
+the Hierarchy while editing. A scene full of entities called `Level tile 4,-7`
+that you cannot usefully edit would be worse than none; the Inspector's own
+preview is what the editor shows instead.
+
+### Connector tiles
 ### Connector tiles
 
 A connector is invisible at runtime but counts as present to its neighbours.
@@ -1269,6 +1701,24 @@ the only thing Visual Studio will read `CppProperties.json` for; open a lone
 script instead and you get no IntelliSense at all. What the two files are, and
 why neither is worth committing, is in
 [docs/scripting-reference.md](scripting-reference.md#making-your-editor-understand-that-include).
+
+**That is also what stops `Door door;` being underlined.** Your editor opens one
+script at a time, and on its own a script has never heard of the others - so
+another script's bare name would look like an unknown type even though it
+builds. Both files point at a third, `.build/script-scope.h`, which declares
+every script in the project; the editor writes it again on **every build**, so
+it is current as soon as a new script compiles. Two things follow from that:
+
+| | |
+|---|---|
+| **Set this up again after upgrading the engine** | A `CppProperties.json` written before this existed does not mention the scope header, and the symptom is exactly the one it fixes. The file says at the top when it was written and by what. |
+| **A brand-new script is unknown until it compiles once** | Save it and switch to the editor; the rebuild is what tells your IDE the name exists. Visual Studio caches aggressively, so if a name stays red after that, close the folder and reopen it. |
+
+The scope header is not a description of the real compile, and it says so in
+its own text: every script is complete there, so two scripts that each call the
+other show no error while you type and are still refused by the build, which
+names the loop. Another script's file-scope helper functions are the reverse -
+they compile but are not offered to you.
 
 There is a **Build Scripts** button in the Assets panel too, for building
 without alt-tabbing - which is what you want after fixing a compile error.
@@ -1331,8 +1781,8 @@ always builds on the spot, whether anything changed or not.
 ### What an exported game gets
 
 **One `userContent.dll`**, not the per-script libraries. A shipped game is never
-going to recompile a script, and eleven libraries would mean eleven import
-tables and eleven lots of load-time work for nothing.
+going to recompile a script, and a library per script would mean an import
+table and a round of load-time work apiece, for nothing.
 
 It is the same object files linked a different way, so exporting straight after
 a build is a link and not a rebuild — a second or two.
@@ -1462,6 +1912,34 @@ std::string portrait;              // [image] shown on the HUD
 std::string walkAnimations[4];     // [animation] right, left, up, down
 ```
 
+##### An array is one folding row
+
+An array is **one collapsible row** carrying the array's name, with `4 of 4`
+beside it and the elements underneath labelled by index alone:
+
+```
+  walkAnimations                4 of 4
+    [0]   [ hero.png#walk_right ]
+    [1]   [ hero.png#walk_left  ]
+```
+
+Each element is a full variable of its own underneath — saved separately,
+revertable separately, overridable separately on a prefab instance. Only the
+looking is grouped.
+
+**Drag the number to change how many rows are offered.** It does *not* resize
+the array: a `[4]` in the script is four elements for as long as the object
+exists, and nothing in a tool can reallocate a C++ array. It is for an array
+that is longer than a particular entity uses — sixteen slots of which three
+are filled is thirteen blank rows otherwise.
+
+Shortening **hides** rows rather than clearing them, so a drag from 16 to 1 and
+back costs nothing. Anything hidden that still holds a value is named under the
+header — *"2 hidden element(s) still have a value, and the script still reads
+them"* — with a **Clear them** button, because a length the script does not
+honour is exactly the kind of quiet disagreement this editor reports rather
+than leaves to be found.
+
 `[texture]` and `[sprite]` also mean an image, `[anim]` and `[clip]` an
 animation, and **case does not matter** — `[Animation]` is the same marker. A
 marker naming a kind the engine has no slot for is reported in the Console and
@@ -1491,6 +1969,39 @@ the Console says why.
 A `static constexpr` constant is **not** exposed, and the Console says which
 one and why. Make it an ordinary member to tune it.
 
+##### And some names a SCRIPT cannot have
+
+Those five are about variables. A **script's own name** has one rule beyond
+being a legal C++ class name: it cannot be the name of a type scripts declare
+variables of. That is `Color`, `Vec2`, `Vector2`, `EntityRef`, `PrefabRef`,
+`AnimationRef`, `ImageRef`, every component's short spelling —
+`TransformRef`, `SpriteRenderer`, `SpriteAnimator`, `Rigidbody2D`, `CameraRef`,
+`Tilemap`, `SpinRef`, `BoxCollider2D`, `CircleCollider2D`, `CapsuleCollider2D`,
+`EdgeCollider2D`, `PolygonCollider2D`, `TilemapCollider2D`, `UIRectRef`,
+`UIImageRef`, `UITextRef`, `UIButtonRef`, `UISliderRef`, `PlayerInput` — and every
+component's **own** name, because that is a reference too: `TransformComponent`,
+`SpriteComponent`, `SpriteAnimationComponent`, `Rigidbody2DComponent`,
+`CameraComponent`, `TilemapComponent`, `TilemapColliderComponent`,
+`SpinComponent`, `ScriptComponent`, `BoxColliderComponent`,
+`CircleColliderComponent`, `CapsuleColliderComponent`, `EdgeColliderComponent`,
+`PolygonColliderComponent`, `UIRectComponent`, `UIImageComponent`,
+`UITextComponent`, `UIButtonComponent`, `UISliderComponent` and
+`PlayerInputComponent`.
+
+The reason is that a script's name becomes available to every other script
+without an include — that is what lets you write `Door door;`. So a script
+called `Color` would make `Color tint;` in *every other script* stop meaning a
+colour and start meaning a reference to that script: the Inspector would draw
+a drag-an-entity slot where a colour picker was, and nothing would say why.
+
+**New Script and Rename refuse the name** with that explanation while you can
+still pick another, and the build warns by name for a file that arrived some
+other way — copied in, cloned with the project, or renamed on disk.
+
+Names like `Entity` or `Scene` are *not* on the list, deliberately. Nothing can
+be declared as a variable of those, so a script by that name is a compile error
+in a file you can open and rename. The list is the set that fails quietly.
+
 #### How it works, and what it misses
 
 C++ has no reflection — `requires` can ask whether a *named* member exists, but
@@ -1504,7 +2015,13 @@ unusual ones. Three things make missing them cheap:
 - anything unrecognised is simply not exposed — the same as before;
 - the generated code wraps every variable in `if constexpr (requires ...)`, so
   a variable it got wrong **compiles away** rather than breaking your build;
-- the Console lists what it exposed and what it skipped, with the reason.
+- the Console lists what it exposed and what it skipped, with the reason;
+- and if the compiler disagrees — a variable the parser accepted that then
+  compiles away — **the script says so the first time it runs**, naming the
+  variable. That third case used to be the silent one: the Console announced
+  the variable as exposed, the guard above removed it, and it appeared in
+  neither list. Only the generated code can see it, because the guard is
+  resolved by the compiler long after the source was read.
 
 #### When to write it yourself
 
@@ -1580,8 +2097,21 @@ void OnFixedUpdate() {
 
 Plain, it takes anything. **A `[TypeName]` marker narrows it** to entities
 carrying that component or script — `[Rigidbody2DComponent]`, `[DoorSwitch]` —
-and the Inspector uses it twice: the picker offers only entities that have one,
-and a reference pointing at something that does not says so.
+and the Inspector uses it three times: the picker offers only entities that
+have one, a **drop is only taken from an entity that has one**, and a reference
+pointing at something that does not says so.
+
+A drag from the Hierarchy that cannot satisfy the slot does not light the
+target up and does not land; the row says what is missing from it while you
+hover — *"'Lamp Post' has no Door on it, so there is nothing here for this to
+point at"* — so the refusal is an answer rather than a drop that vanished. A
+plain `eng::EntityRef` with no marker still takes anything, because "any entity
+will do" is what no marker means.
+
+A slot can still **end up** wrong — a hand-edited scene file, or a component
+removed from an entity that was already pointed at — and that is allowed: a
+level in the middle of being built is allowed to be wrong, as long as it is not
+wrong quietly. The amber line below the row is what says so.
 
 The type is named as **text**, which is what lets one mechanism serve both a
 component the engine ships and a script you wrote this afternoon. Writing the
@@ -1613,12 +2143,27 @@ Ask for the target when you need it and do not keep it — `Target()` is a hash
 lookup, and the entity may have been destroyed since last frame. That is the
 same rule the rest of the engine follows for `EntityId`.
 
-To reach another **script's own members** you need its class in a header both
-files include, because a script in `assets/scripts` sits in an anonymous
-namespace and no other file can name its type. Most references do not need
-that: `fields.Ref(..., "DoorSwitch", ...)` plus a transform or a message gets
-you there with no headers at all. See `engine/include/engine/scene/EntityRef.h`
-and `FindScriptOn` in `ScriptComponent.h`.
+To reach another **script's own members**, write its name:
+
+```cpp
+Door door;              // then door->Open();
+```
+
+No header, no include and no wrapper type. The build puts every script in the
+project in scope before a script is compiled, so the bare name is already a
+reference you can drag an entity onto, and two scripts may point at each other
+in either direction or both - see `engine/tools/ScriptVars.h` for how and
+`engine/scene/ScriptRef.h` for what the name means, including the three places
+the bare name is not the spelling (a reference to its own kind, a base class,
+and two scripts that each call the other).
+`assets/scripts/Script References/` is the worked example - two files, no
+header, a reference each way - and `assets/scenes/script_references.oscene` is
+the pair running.
+
+Most references do not need that: `fields.Ref(..., "DoorSwitch", ...)` plus a
+transform or a message gets you there with no headers at all. See
+`engine/include/engine/scene/ScriptRef.h`, `EntityRef.h`, and `FindScriptOn` in
+`ScriptComponent.h`.
 
 `assets/scripts/GameRules.cpp` is the worked example — its three HUD labels
 used to be names written in the C++.
@@ -1682,6 +2227,62 @@ to look. If it is not listed at all, either it did not compile - look further
 up the Console - or the file is missing its `ENGINE_REGISTER_SCRIPT` line,
 which the editor also warns about by name. The Inspector shows the same hook
 list for the selected entity's script.
+
+### Stepping through a script in a debugger
+
+**Put a breakpoint on a line of your own script and it will stop there.** Every
+script is compiled with debug information (`/Z7`) and every script library is
+linked with `/DEBUG`, so `.build/modules/` holds a `.pdb` beside each `.dll`
+and the line tables name your own file — `assets/scripts/Gun.cpp`, not the
+generated unit the compiler actually sees.
+
+Nothing needs switching on. It is not a setting, it does not depend on whether
+the editor was built Debug or Release, and it costs the running game nothing:
+the DLLs are byte-for-byte the same size they were before, with the same code
+in them.
+
+**Attach to the editor, not to your game.** The scripts run inside the editor
+process, so that is the process to attach to.
+
+| | |
+| --- | --- |
+| **Visual Studio** | Debug → Attach to Process (**Ctrl+Alt+P**), type `editor`, Attach. After that, **Shift+Alt+P** reattaches with no dialog at all — it falls back to matching on the process name, so it keeps working after a restart. |
+| **VS Code** | Run → Start Debugging (**F5**) and pick *Attach to the running editor*. That configuration is written for you: **Project → Write IDE Files** puts it in `.vscode/launch.json` beside the IntelliSense files. |
+
+Breakpoints bind as soon as the module loads, so you can set one, press
+Rebuild, and stop on the next frame.
+
+**Editing a script while stopped on a breakpoint works.** Saving triggers a
+rebuild, the editor unloads the libraries, relinks them and loads them again,
+and the debugger stays attached. Visual Studio holds a `.pdb` open until you
+*detach* — not until the scripts unload — so the editor removes each symbol
+file immediately before relinking it, which it is allowed to do even while the
+debugger is reading it. If something else has one open and will not let go,
+the Console says which file and why before the linker's own `LNK1201` arrives.
+
+**Two things are worth knowing before you go looking for them:**
+
+- **A breakpoint may bind in more than one place.** Every script library
+  contains the text of every script in the project — that is what lets one
+  script name another without a header — so `Gun.cpp:51` exists in all 23
+  modules, and only the copy in `Gun`'s own module ever runs. Stepping and
+  variables are unaffected; it is the breakpoint list that looks busy. To be
+  specific in Visual Studio, use a function breakpoint with a module
+  qualifier: `{,,Gun__65c7fbd9.dll}s_Gun::Gun::OnFixedUpdate`. Note the
+  namespace: inside a generated unit your class lives in `s_<Name>`.
+- **`.build/` grows by about 130 MB on a 23-script project** — roughly 6 MB of
+  symbols per script, most of it the engine's own type information, which
+  every module carries. It is all inside `.build/`, which is already ignored
+  by git and safe to delete.
+
+**If a breakpoint will not bind**, the usual cause is that the code running is
+not the code on screen: a script that fails to compile leaves the last working
+library loaded, deliberately, so the game keeps running while you fix it. The
+Console says so by name. Build it successfully and the breakpoint binds.
+
+**An exported game carries no symbols.** `userContent.dll` is linked without
+`/DEBUG`, so a shipped game is exactly what it was before this existed — same
+size, no `.pdb` beside it, nothing to leak.
 
 ### When the scripts will not link
 
